@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Private exports and browser-created temporary files.
+exports/
+*.raw.json
+*.raw.json.*
+*.tmp
+*.part
+.DS_Store
+
+# Optional local title-series naming rules; never commit personal title patterns.
+extension/naming.local.json

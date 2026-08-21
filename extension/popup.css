@@ -1,0 +1,12 @@
+body { width: 340px; margin: 0; color: #202123; background: #fff; font: 13px/1.45 system-ui, sans-serif; }
+main { padding: 14px; }
+h1 { margin: 0 0 10px; font-size: 16px; }
+#state { margin-bottom: 10px; color: #146c43; font-weight: 700; }
+dl { margin: 0 0 12px; }
+dt { color: #666; font-size: 11px; margin-top: 6px; }
+dd { margin: 0; overflow-wrap: anywhere; }
+button { width: 100%; padding: 8px; border: 0; border-radius: 6px; color: #fff; background: #10a37f; cursor: pointer; font-weight: 700; }
+button.secondary { margin-top: 6px; background: #565869; }
+button:disabled { color: #777; background: #ddd; cursor: not-allowed; }
+pre { max-height: 230px; overflow: auto; margin: 10px 0 0; padding: 8px; color: #c5c5d2; background: #202123; border-radius: 6px; font: 11px/1.4 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hint { color: #666; font-size: 11px; margin-bottom: 0; }

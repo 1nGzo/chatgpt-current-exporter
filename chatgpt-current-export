@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
+if [[ "${1:-}" == "convert" ]]; then
+  shift
+fi
+PYTHONPATH="$project_dir${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m exporter.convert "$@"

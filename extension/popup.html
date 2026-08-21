@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ChatGPT 当前会话导出器</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <h1>当前会话导出器</h1>
+      <div id="state">读取当前标签页…</div>
+      <dl>
+        <dt>Conversation ID</dt><dd id="conversation-id">—</dd>
+        <dt>Title</dt><dd id="conversation-title">—</dd>
+        <dt>Captured</dt><dd id="captured">—</dd>
+        <dt>Stats</dt><dd id="stats">—</dd>
+      </dl>
+      <button id="export" type="button">导出当前会话</button>
+      <button id="rescan" type="button" class="secondary">重新扫描当前页面</button>
+      <pre id="diagnostics">—</pre>
+      <p class="hint">数据只在本地处理；扩展不读取或保存 Cookie、Authorization、token 或密码。</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "series_rules": [
+    {
+      "title_pattern": "^Series ([0-9]+)$",
+      "filename_prefix": "Conversation",
+      "minimum_digits": 3
+    }
+  ]
+}

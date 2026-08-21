@@ -1,0 +1,14 @@
+{
+  "title": "人工 branch fixture",
+  "conversation_id": "fixture-branch",
+  "current_node": "e",
+  "mapping": {
+    "root": {"id": "root", "parent": null, "children": ["a"], "message": null},
+    "a": {"id": "a", "parent": "root", "children": ["b-old", "b2"], "message": {"id": "msg-a", "author": {"role": "user"}, "content": {"content_type": "text", "parts": ["A user"]}}},
+    "b-old": {"id": "b-old", "parent": "a", "children": ["c-old"], "message": {"id": "msg-b-old", "author": {"role": "assistant"}, "content": {"content_type": "text", "parts": ["B assistant-old"]}}},
+    "c-old": {"id": "c-old", "parent": "b-old", "children": [], "message": {"id": "msg-c-old", "author": {"role": "assistant"}, "content": {"content_type": "text", "parts": ["C old branch"]}}},
+    "b2": {"id": "b2", "parent": "a", "children": ["d"], "message": {"id": "msg-b2", "author": {"role": "assistant"}, "content": {"content_type": "text", "parts": ["B2 assistant-new"]}}},
+    "d": {"id": "d", "parent": "b2", "children": ["e"], "message": {"id": "msg-d", "author": {"role": "user"}, "content": {"content_type": "text", "parts": ["D user"]}}},
+    "e": {"id": "e", "parent": "d", "children": [], "message": {"id": "msg-e", "author": {"role": "assistant"}, "content": {"content_type": "text", "parts": ["E assistant"]}}}
+  }
+}
