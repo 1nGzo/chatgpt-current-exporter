@@ -1,113 +1,43 @@
-# Current Conversation Exporter
+# ChatGPT 当前单会话导出器
 
-这是一个本地优先的 Chromium Manifest V3 扩展和 Python 转换器，用于保存浏览器当前打开的单个网页 conversation：
+这是一个本地优先的 Chromium Manifest V3 扩展和 Python 转换器，用于把浏览器当前打开的单个 ChatGPT conversation 保存为：
 
 ```text
 <名称>.raw.json
 <名称>.md
 ```
 
-当前正式保留 ChatGPT 单会话导出行为，并加入 Gemini Web 的安全结构诊断与平台适配骨架。Gemini 的未公开 response schema 必须经过真实浏览器观察后才能实现正式导出；在此之前不会把猜测的 schema 或 DOM 文本标记为成功。
+扩展只观察 ChatGPT 页面自己已经发出的 `fetch`/`XMLHttpRequest` JSON 响应，不抓取消息 DOM，不调用 OpenAI API，不上传任何数据，也不读取或保存 Cookie、Authorization、access token、session token、密码、analytics 或 telemetry。
 
-## 架构
+## 当前实现
 
-```text
-网页 fetch / XHR / stream / WebSocket response
-                    ↓
-             page-world observer
-                    ↓
-             platform adapter
-                    ↓
-       normalized conversation model
-                    ↓
-              raw JSON + Markdown
-```
+浏览器端由三层组成：
 
-主要目录：
+1. `extension/content.js` 在 `document_start` 运行，读取 URL、页面标题并提供右下角紧凑按钮和 popup 状态；点击该按钮后才展开页面导出面板。它不把 DOM 消息列表当作历史数据源。
+2. `extension/injected.js` 以 page world 观察 `fetch` 和 XHR。它只对 response 做 `clone()`/读取，不修改原始 response，也不读取请求 headers。符合 conversation 形状的数据通过 `window.postMessage` 交给 content script。
+3. `extension/converter.js` 优先使用 `mapping`/`current_node` active-path 规则；对当前 Web 返回的 `messages`/`current_node` 结构，会在内存中构造 synthetic mapping 后生成 Markdown；扩展随后通过 Blob 下载未经改写的 raw JSON 和 Markdown 两个文件。
 
-- `extension/core/`：平台识别和统一的 normalized conversation model；
-- `extension/adapters/chatgpt.js`：ChatGPT candidate detection 和 normalized adapter 边界；
-- `extension/adapters/gemini.js`：Gemini 结构诊断 adapter，当前不声明 schema 已验证；
-- `extension/injected.js`：page-world response 观察器；
-- `extension/content.js`：当前页面状态、导出按钮和 popup 消息桥；
-- `extension/converter.js`：现有 ChatGPT `mapping/current_node` 转换逻辑；
-- `exporter/model.py`：Python normalized model；
-- `exporter/conversation.py`、`exporter/markdown.py`、`exporter/naming.py`：历史 raw 转换核心。
+Python 端的 `exporter/conversation.py` 是可重新处理历史 raw JSON 的独立核心；`exporter/markdown.py` 生成 Raw Markdown；`exporter/naming.py` 负责文件名和标题编号；`exporter/convert.py` 是 CLI。
 
-Raw payload 始终独立保留，不会因为进入 normalized model 而删除平台字段。
-
-## ChatGPT 支持
-
-ChatGPT 的现有行为保持不变：
+mapping 结构的页面端和 Python 端都遵守：
 
 ```text
 current_node → parent → parent → ... → root → reverse
 ```
 
-因此 Markdown 只输出当前 active path，不按时间遍历 `mapping`，不会混入兄弟 branch。当前 ChatGPT `messages` 分页合并、`create_time` 顺序 fallback、内部 role/content 过滤、完整性检查和冲突保护继续由原有逻辑负责。
+因此只会输出当前 active path，不会按时间遍历 `mapping`，也不会混入兄弟 branch。`thoughts` 和 `reasoning_recap` 等内部 content type 不进入 Markdown，但仍保留在 raw JSON 中。没有 `message`、不可见 role、空正文节点会被跳过并计入诊断；未知 content part 不静默丢弃，而会写入可见占位符并标记 warning。
 
-ChatGPT adapter 不会把 `mapping/current_node` 规则泄漏到 Gemini adapter。旧 raw JSON 没有 exporter metadata 时，Python 仍会根据 `mapping` schema 识别为 ChatGPT。
-
-## Gemini 支持状态
-
-扩展已匹配：
-
-```text
-https://gemini.google.com/*
-```
-
-Gemini 当前阶段只做安全 discovery：
-
-- 观察 page-world 的 fetch、XHR、stream 和 WebSocket 数据通道；
-- 对 JSON 或 stream frame 做内存结构分析；
-- 只报告 top-level keys、wrapper depth、可能的 turn 数量、role 计数、分页信号和 completeness 状态；
-- 不输出 response 正文；
-- 不使用 DOM 消息列表作为正式历史数据源；
-- 不猜测或写死 Gemini 私有 endpoint；
-- 不把可能的 turn 结构标记为 Ready；
-- 未确认 schema、顺序、候选分支和完整性前，不生成 Gemini raw 或 Markdown。
-
-因此当前 Gemini popup 可能显示：
-
-```text
-Platform: Gemini
-Completeness: UNKNOWN
-Gemini possible candidates (unverified): ...
-```
-
-这表示诊断链路已经运行，不表示 Gemini 正式导出已经完成。下一步需要在真实 Gemini 页面观察安全诊断字段，再实现针对实际 schema 的 normalize、branch selection、pagination validation 和 Raw Bundle 保存。
-
-## Normalized Conversation Model
-
-平台 adapter 在进入共享 renderer 前使用统一模型：
-
-```text
-platform
-conversation_id
-title
-source_url
-captured_at
-
-messages:
-    sequence
-    role
-    text
-    timestamp?
-    platform_message_id?
-    metadata?
-```
-
-normalized model 不是 raw JSON 的替代品。ChatGPT 现有 renderer 保持兼容格式；经过 schema 验证的平台可以使用通用 normalized Markdown renderer。
+Markdown 采用稳定的 `Turn + metadata + 原文` 形态，并使用实际 conversation title 作为 H1。正文不总结、不改写、不截断、不按内容类型做语义过滤；中文、emoji、换行、Markdown 和 code block 都按原字符串写入。
 
 ## 文件命名
 
-默认使用经过安全清洗的 conversation title。需要系列编号规则时，可复制：
+默认使用经过安全清洗的 conversation title 作为文件名。需要系列编号规则时，可复制：
 
 ```text
 extension/naming.local.example.json → extension/naming.local.json
 ```
 
-`naming.local.json` 被 `.gitignore` 排除，并同时供 Python CLI 和浏览器扩展读取。规则使用 `title_pattern`、第一个数字捕获组、`filename_prefix` 和 `minimum_digits`，因此不同用户可以配置自己的系列标题格式，而不会把个人命名信息提交到公开仓库。
+`naming.local.json` 被 `.gitignore` 排除，并同时供 Python CLI 和浏览器扩展读取。规则使用 `title_pattern`、第一个数字捕获组、`filename_prefix` 和 `minimum_digits`；因此不同用户可以配置自己的系列标题格式，而不会把个人命名信息提交到公开仓库。
 
 其他标题会清洗控制字符、`/`、`\` 及常见文件系统非法字符。Python CLI 默认不会覆盖已有的不同 Markdown：可使用 `--new` 生成 `.new`/`.new2`，或明确使用 `--force`。浏览器下载由 Chrome 的本地下载冲突规则处理，通常会产生 `(1)` 等新文件名；项目不会主动删除或覆盖已有下载。
 
@@ -125,68 +55,89 @@ python3 -m exporter.convert /path/to/conversation.raw.json --verbose
 ./chatgpt-current-export convert /path/to/conversation.raw.json --verbose
 ```
 
-旧 ChatGPT raw JSON 仍可独立转换。CLI 会输出平台识别结果、title、conversation id、mapping 节点数、active path 节点数、user/assistant 数量、排除分支数量、状态和 Markdown 字节数。默认不输出正文预览，避免把私人内容刷进终端。
+默认 Markdown 写在 raw JSON 同目录，输出路径可自定义：
 
-当前 Python active-path parser 正式支持 ChatGPT `mapping` schema。Gemini raw schema 尚未确认，因此 CLI 不会把任意 Gemini response 猜测成可转换 conversation。
+```bash
+./chatgpt-current-export convert /path/to/conversation.raw.json \
+  --output /path/to/output/conversation.md \
+  --new \
+  --verbose
+```
 
-## 安装与使用
+CLI 会输出 title、conversation id、mapping 节点数、active path 节点数、user/assistant 数量、排除分支数量、状态和 Markdown 字节数。默认不输出正文预览，避免把私人内容刷进终端。
+
+如果 payload 明确含有 `has_more`、`has_more_messages`、`truncated`、`partial`、`next_cursor` 等分页/截断信号，CLI 会以非零状态退出并拒绝生成 Markdown。没有这些字段并不等于后端完整性已被证明，因此状态会明确写成“payload completeness is not independently provable”。
+
+## 安装 Chromium / Chrome 扩展
 
 1. 打开 `chrome://extensions`。
 2. 开启右上角“开发者模式”。
 3. 点击“加载已解压的扩展程序”。
 4. 选择本目录下的 `extension/`，不是项目根目录。
-5. 打开或刷新 ChatGPT 或 Gemini 页面。
-6. 点击扩展 popup 查看 `Platform` 和诊断状态。
-7. ChatGPT 捕获到完整结构化数据后，点击页面右下角“导出器”按钮，再点击“导出当前会话”。
+5. 打开或刷新 `https://chatgpt.com/c/<conversation-id>`（旧域名 `chat.openai.com` 也匹配）。
+6. 等待当前会话自己的结构化 JSON 响应被捕获。页面右下角的“导出器”小按钮或扩展 popup 会显示/提供状态；点击页面按钮后可查看 `Ready`、conversation id、mapping 数量、active path 数量和 raw 字节数。
+7. 点击页面右下角“导出器”按钮打开面板，再点击“导出当前会话”；也可以打开扩展 popup 点击同名按钮。
 
 文件会进入 Chrome 当前配置的默认下载目录。Chrome 可能在首次连续下载两个文件时要求允许该站点的多个自动下载；需要允许，否则可能只看到 raw 或只看到 Markdown。
 
-如果 ChatGPT 显示尚未捕获完整 conversation 数据，请刷新页面，让 `document_start` 监听器从请求开始运行，再等待页面加载完成；也可以点击“重新扫描当前页面”。扩展不会改用 DOM 抓取来伪造完整结果。
+如果显示：
 
-## Gemini Live Discovery
+```text
+尚未捕获完整 conversation 数据，可刷新当前会话后重试
+```
 
-终端无法证明当前登录 Gemini 页面实际使用的 transport 或 schema。进行下一步 live test 时：
+请刷新当前会话，让 `document_start` 监听器从请求开始运行，再等待页面加载完成；也可以先点击“重新扫描当前页面”。扩展不会改用 DOM 抓取来伪造完整结果。
 
-1. 重新加载扩展并打开 `https://gemini.google.com/`；
-2. 打开一个非敏感测试 conversation；
-3. 刷新页面并等待请求完成；
-4. 打开扩展 popup；
-5. 只提供以下诊断字段：`Platform`、`Current URL`、`Fetch observed`、`XHR observed`、`Stream responses`、`JSON candidates`、`Gemini possible candidates`、`Last top-level keys`、`Wrapper depth`、`Possible turns`、`Possible user messages`、`Possible assistant messages`、`Pagination detected`、`Completeness`。
+## 当前接口不确定性与诊断
 
-不要提供 Cookie、Authorization、token、session、response 正文或私人 conversation 内容。当前诊断只展示结构字段和计数，不展示 response 文本。
+本项目不把某个 endpoint 作为唯一数据源。根据目标页面实际观察到的请求路径，并参考 API-first 的公开实现，`extension/fallback-config.js` 集中配置了受限的 verified same-origin fallback。重新扫描时按顺序尝试当前 URL 对应的 `/backend-api/conversations/<id>` 和兼容旧版本的 `/backend-api/conversation/<id>`，使用浏览器当前 session 的 `credentials: include`，不读取或保存认证 header/cookie/token：
 
-## Completeness 与安全边界
+```text
+页面已经发出的、符合 conversation 结构的 JSON response
+>
+verified same-origin fallback（仅当前 conversation、仅 JSON response）
+>
+明确告诉用户尚未捕获
+```
 
-如果检测到分页、cursor、partial、truncated、未知 branch state 或其他明确的不完整信号，状态必须保持 `Incomplete` 或 `UNKNOWN`，不会生成伪完整 Markdown。没有分页信号也不自动证明后端完整。
+fallback response 仍必须通过 `mapping` 或 `messages`、`current_node`、active path 和可见消息检查；失败时不会生成半成品 Markdown。纯终端测试只能证明 parser、扩展语法和 fallback mock，不足以证明当前登录会话确实返回完整 conversation response。
 
-所有数据默认只留在本地：
-
-- 不上传第三方；
-- 不调用云端 LLM、OpenAI API 或 Gemini API；
-- 无 analytics、telemetry 或错误上报；
-- 不读取或保存 Cookie、Authorization、access token、session token 或密码；
-- `exports/`、`*.raw.json`、本地命名配置和临时 capture 文件均在 `.gitignore` 中；
-- 测试 fixture 不包含真实 conversation。
+如果仍然捕获不到数据，请只从 DevTools 的 Network 中提供一次请求的 Request URL 和不含认证信息的 response schema 字段，例如是否有 `mapping`、`current_node`、`title`、conversation id；不要提供 Cookie、Authorization、token、密码或完整私人 response。
 
 ## 测试
 
-Python 回归测试：
+人工 fixture `fixtures/branch.json` 包含旧 assistant branch 和新 branch，`current_node` 指向 `E`；测试要求输出 `A → B2 → D → E`，不输出旧 branch。运行：
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-扩展语法和配置检查：
+覆盖：
+
+- 无 branch、有 branch、空/metadata 节点；
+- current_node active path 与循环/缺 parent 错误；
+- 中文、emoji、multiline Markdown、code block；
+- 5000 行长文本不截断；
+- 显式分页/截断信号拒绝生成；
+- 文件名清洗和可选的系列编号规则。
+
+还可以运行扩展静态检查：
 
 ```bash
-for file in extension/*.js extension/core/*.js extension/adapters/*.js; do node --check "$file"; done
+for file in extension/*.js; do node --check "$file"; done
 python3 -m json.tool extension/manifest.json >/dev/null
 ```
 
-Gemini/platform diagnostics mock：
+## 已知限制
 
-```bash
-node tests/test_platform_adapters.js
-```
+- 本轮没有在真实登录的 ChatGPT 页面上做 live capture；因此“按钮出现”和“纯终端 parser 测试通过”不等于已经证明当前网站能返回完整单会话数据。
+- 页面监听器只能捕获它安装之后页面自己发出的 JSON response；刷新通常是最可靠的重新捕获方式。
+- 如果当前版本使用 streaming/SSE、明确存在下一页的分页 response、非 JSON transport，当前版本不会偷偷改成 DOM 抓取；它会保持 Waiting/Error 并提示需要诊断。`page_info.end_cursor` 单独存在不等于仍有下一页，需结合 `has_next_page`/`has_more` 或明确的 next cursor 判断。
+- 扩展端和 Python 端各有一个小型 renderer，这是为了让一次点击可以同时下载两个本地文件；两者共享同一 active-path/schema 规则，但暂时没有真实页面的 parity fixture。Python 端是历史 raw JSON 的权威重建入口。
+- 当前 ChatGPT 页面返回的 `messages` schema 已由扩展端兼容；本轮按任务边界未修改 Python 核心，因此这类 raw JSON 仍可由扩展直接生成 Markdown，但通过 Python CLI 重新生成仍需要后续增加同等 schema adapter。
+- 对不可见内部节点只从 Markdown 过滤，不从 raw JSON 删除；附件正文若不在 response 中，只能保留 response 中已有的 pointer/metadata 占位符。
+- Chrome 页面 Blob 下载可能受浏览器的多个下载确认和默认下载目录设置影响。
 
-测试覆盖现有 ChatGPT active branch、current_node、长文本、Unicode、Markdown、分页拒绝、文件命名，以及平台识别、normalized model 和 Gemini 结构诊断。真实 Gemini transport/schema 和完整导出仍需浏览器 acceptance test 后才能标记为正式支持。
+## Scope and privacy
+
+本项目只处理用户主动导出的当前 conversation，并默认将数据保留在本地。它不上传数据、不调用云端 LLM 或 OpenAI API、不读取或保存认证信息，也不包含真实 conversation fixture。`exports/`、`*.raw.json`、可选的 `naming.local.json` 和临时文件均已加入 `.gitignore`，适合发布到公开仓库。

@@ -3,20 +3,11 @@
 
   const SOURCE = "chatgpt-current-exporter";
   const converter = globalThis.CCEConversationConverter;
-  const platformCore = globalThis.CCEPlatformCore;
-  const platformId = platformCore && typeof platformCore.detectPlatform === "function"
-    ? platformCore.detectPlatform(window.location.href)
-    : "chatgpt";
-  const platformDefinition = platformCore && typeof platformCore.definition === "function"
-    ? platformCore.definition(platformId)
-    : { id: platformId, label: platformId };
   const captured = new Map();
   const basePayloads = new Map();
   const messagePages = new Map();
   const runtimeDiagnostics = {
     extension: true,
-    platform: platformId,
-    platformLabel: platformDefinition.label,
     injected: false,
     fetchObserved: 0,
     xhrObserved: 0,
@@ -52,19 +43,7 @@
     lastResponsePath: "",
     observedResponsePaths: [],
     rejectedIdMismatches: 0,
-    lastRescan: "",
-    geminiConversationCandidates: 0,
-    geminiLastTopLevelKeys: [],
-    geminiLastWrapperDepth: null,
-    geminiLastTurnCount: 0,
-    geminiLastUserMessages: 0,
-    geminiLastAssistantMessages: 0,
-    geminiPaginationDetected: false,
-    geminiPaginationSignals: [],
-    geminiCompleteness: "UNKNOWN",
-    geminiSchemaVerified: false,
-    geminiLastFieldHints: [],
-    geminiLastConversationId: null
+    lastRescan: ""
   };
   let currentId = currentConversationId();
   let lastError = "";
@@ -84,9 +63,6 @@
   }
 
   function currentConversationId() {
-    if (platformId === "gemini" && platformCore && typeof platformCore.conversationIdHint === "function") {
-      return platformCore.conversationIdHint(window.location.href, platformId);
-    }
     try {
       const parts = new URL(window.location.href).pathname.split("/").filter(Boolean);
       const index = parts.lastIndexOf("c");
@@ -160,9 +136,6 @@
       return;
     }
     updateParsedDiagnostics(document, id);
-    const normalized = platformId === "chatgpt" && globalThis.CCEChatGPTAdapter && typeof globalThis.CCEChatGPTAdapter.normalize === "function"
-      ? globalThis.CCEChatGPTAdapter.normalize(document, { sourceUrl: safeCurrentUrl(), capturedAt: new Date().toISOString() })
-      : null;
     if (document.stats.incompleteReasons.length) {
       captured.delete(id);
       const reason = document.stats.incompleteReasons.join("；");
@@ -180,8 +153,7 @@
       rawSize: new Blob([rawText]).size,
       capturedAt: new Date().toISOString(),
       pageCount: pages.length,
-      paginationState: pagination,
-      normalized
+      paginationState: pagination
     });
     lastError = "";
     updatePanel();
@@ -208,14 +180,6 @@
       return "已捕获 conversation，active path 可导出";
     }
     if (lastError) return lastError;
-    if (platformId === "gemini") {
-      if (!runtimeDiagnostics.injected) return "Gemini page-world observer 尚未确认注入；请刷新当前页面";
-      if (runtimeDiagnostics.geminiCompleteness === "INCOMPLETE") return `Gemini response 明确存在分页/截断信号：${runtimeDiagnostics.geminiPaginationSignals.join(", ") || "unknown"}；暂不导出`;
-      if (runtimeDiagnostics.geminiConversationCandidates > 0) return "已发现可能的 Gemini turn 结构，但 schema、顺序、分支和完整性尚未验证；暂不导出";
-      if (runtimeDiagnostics.jsonCandidates > 0) return "已观察 Gemini 结构化 response，但尚未确认 conversation schema；当前仅诊断";
-      if (runtimeDiagnostics.fetchObserved || runtimeDiagnostics.xhrObserved || runtimeDiagnostics.streamResponses || runtimeDiagnostics.webSocketMessages) return "已观察 Gemini 请求，但尚未发现可识别的 turn 结构；当前仅诊断";
-      return "等待 Gemini 结构化 response；刷新当前会话后重试";
-    }
     if (runtimeDiagnostics.paginationState === "waiting-older-pages") return "当前 conversation 仍有旧消息分页；请继续向上滚动至最顶端后重新扫描";
     if (!currentId) return "当前 URL 未识别 /c/<conversation_id>";
     if (!runtimeDiagnostics.injected) return "尚未确认 injected.js 在 page world 运行";
@@ -241,12 +205,10 @@
     const parsedDocument = entry ? entry.document : null;
     const stats = parsedDocument ? parsedDocument.stats : null;
     const reason = readyReason(entry);
-    const state = lastError ? "Error" : platformId === "gemini" ? "Waiting" : (entry && (stats.incompleteReasons.length || stats.visibleMessages === 0) ? "Error" : entry && stats.warnings.length ? "Review" : entry ? "Ready" : "Waiting");
+    const state = lastError ? "Error" : (entry && (stats.incompleteReasons.length || stats.visibleMessages === 0) ? "Error" : entry && stats.warnings.length ? "Review" : entry ? "Ready" : "Waiting");
     return {
       extension: true,
-      platform: platformId,
-      platformLabel: platformDefinition.label,
-      conversationId: currentId || (platformId === "gemini" ? runtimeDiagnostics.geminiLastConversationId : null),
+      conversationId: currentId,
       title: parsedDocument ? parsedDocument.title : window.document.title || "",
       capturedAt: entry ? entry.capturedAt : null,
       captured: Boolean(entry),
@@ -263,9 +225,7 @@
       diagnostics: {
         ...runtimeDiagnostics,
         currentUrl: safeCurrentUrl(),
-        platform: platformId,
-        platformLabel: platformDefinition.label,
-        conversationId: currentId || (platformId === "gemini" ? runtimeDiagnostics.geminiLastConversationId : null),
+        conversationId: currentId,
         pagesCaptured: entry ? entry.pageCount : currentPageCount(currentId),
         paginationState: entry ? entry.paginationState : runtimeDiagnostics.paginationState,
         mapping: Boolean(stats ? stats.mappingNodes : runtimeDiagnostics.lastSchema.mapping),
@@ -284,15 +244,10 @@
   function updatePanel() {
     if (!panel) return;
     const snapshot = status();
-    panel.state.textContent = lastError || (snapshot.state === "Ready" ? "Ready（捕获结构化响应；完整性仍需实际验证）" : snapshot.state === "Review" ? "Review（有未识别字段，请检查诊断）" : snapshot.state === "Waiting" ? `${snapshot.platformLabel}：Waiting` : "Error");
-    panel.platform.textContent = text(snapshot.platformLabel);
+    panel.state.textContent = lastError || (snapshot.state === "Ready" ? "Ready（捕获结构化响应；完整性仍需实际验证）" : snapshot.state === "Review" ? "Review（有未识别字段，请检查诊断）" : snapshot.state === "Waiting" ? "Waiting：刷新会话后等待结构化响应" : "Error");
     panel.id.textContent = text(snapshot.conversationId);
     panel.title.textContent = text(snapshot.title);
-    panel.detail.textContent = snapshot.captured
-      ? `mapping ${snapshot.mappingNodes} · active path ${snapshot.activePathNodes} · messages ${snapshot.activePathMessages} · raw ${snapshot.rawJsonSize} bytes`
-      : snapshot.platform === "gemini"
-        ? `JSON ${snapshot.diagnostics.jsonCandidates || 0} · possible turns ${snapshot.diagnostics.geminiLastTurnCount || 0} · completeness ${snapshot.diagnostics.geminiCompleteness || "UNKNOWN"}`
-        : snapshot.readyReason;
+    panel.detail.textContent = snapshot.captured ? `mapping ${snapshot.mappingNodes} · active path ${snapshot.activePathNodes} · messages ${snapshot.activePathMessages} · raw ${snapshot.rawJsonSize} bytes` : snapshot.readyReason;
     panel.button.disabled = !snapshot.captured || snapshot.incompleteReasons.length > 0 || snapshot.activePathMessages === 0;
   }
 
@@ -311,11 +266,6 @@
 
   async function exportCurrent() {
     await namingConfigReady;
-    if (platformId === "gemini") {
-      lastError = "Gemini schema、消息顺序和完整性尚未验证；当前仅提供诊断，不生成导出";
-      updatePanel();
-      return { ok: false, error: lastError };
-    }
     const entry = currentEntry();
     if (!entry) {
       lastError = "尚未捕获完整 conversation 数据，可刷新当前会话后重试";
@@ -386,15 +336,12 @@
 
   function mergeObserverDiagnostics(info) {
     if (!info || typeof info !== "object") return;
-    for (const key of ["platform", "platformLabel", "injected", "fetchObserved", "xhrObserved", "jsonCandidates", "conversationCandidates", "jsonParseErrors", "streamResponses", "webSocketObserved", "webSocketMessages", "conversationEndpointObserved", "currentConversationEndpointResponses", "fallbackAttempts", "fallbackResponses", "fallbackConversationCandidates", "fallbackLastResult", "fallbackConfigured", "fallbackSkipReason", "fallbackLastEndpoint", "messagePageResponses", "messagePageCandidates", "messagePagePreviousTrue", "messagePagePreviousFalse", "messagePagePreviousUnknown", "messagePageNextTrue", "messagePageNextFalse", "messagePageNextUnknown", "cachedMessagePages", "lastMessagePageKeys", "lastContentType", "lastResponsePath", "observedResponsePaths", "cacheSize", "fetchHooked", "xhrHooked", "lastCandidatePath", "geminiConversationCandidates", "geminiLastTopLevelKeys", "geminiLastWrapperDepth", "geminiLastTurnCount", "geminiLastUserMessages", "geminiLastAssistantMessages", "geminiPaginationDetected", "geminiPaginationSignals", "geminiCompleteness", "geminiSchemaVerified", "geminiLastFieldHints", "geminiLastConversationId"]) {
+    for (const key of ["injected", "fetchObserved", "xhrObserved", "jsonCandidates", "conversationCandidates", "jsonParseErrors", "streamResponses", "webSocketObserved", "webSocketMessages", "conversationEndpointObserved", "currentConversationEndpointResponses", "fallbackAttempts", "fallbackResponses", "fallbackConversationCandidates", "fallbackLastResult", "fallbackConfigured", "fallbackSkipReason", "fallbackLastEndpoint", "messagePageResponses", "messagePageCandidates", "messagePagePreviousTrue", "messagePagePreviousFalse", "messagePagePreviousUnknown", "messagePageNextTrue", "messagePageNextFalse", "messagePageNextUnknown", "cachedMessagePages", "lastMessagePageKeys", "lastContentType", "lastResponsePath", "observedResponsePaths", "cacheSize", "fetchHooked", "xhrHooked", "lastCandidatePath"]) {
       if (info[key] !== undefined) runtimeDiagnostics[key] = info[key];
     }
     if (Array.isArray(info.lastDetectedKeys)) runtimeDiagnostics.lastDetectedKeys = info.lastDetectedKeys.slice(0, 80);
     if (Array.isArray(info.lastEndpointKeys)) runtimeDiagnostics.lastEndpointKeys = info.lastEndpointKeys.slice(0, 80);
     if (Array.isArray(info.lastMessagePageKeys)) runtimeDiagnostics.lastMessagePageKeys = info.lastMessagePageKeys.slice(0, 80);
-    if (Array.isArray(info.geminiLastTopLevelKeys)) runtimeDiagnostics.geminiLastTopLevelKeys = info.geminiLastTopLevelKeys.slice(0, 80);
-    if (Array.isArray(info.geminiPaginationSignals)) runtimeDiagnostics.geminiPaginationSignals = info.geminiPaginationSignals.slice(0, 20);
-    if (Array.isArray(info.geminiLastFieldHints)) runtimeDiagnostics.geminiLastFieldHints = info.geminiLastFieldHints.slice(0, 40);
     if (info.lastSchema && typeof info.lastSchema === "object") runtimeDiagnostics.lastSchema = { ...runtimeDiagnostics.lastSchema, ...info.lastSchema };
     if (info.lastEndpointSchema && typeof info.lastEndpointSchema === "object") runtimeDiagnostics.lastEndpointSchema = { ...runtimeDiagnostics.lastEndpointSchema, ...info.lastEndpointSchema };
     updatePanel();
@@ -437,13 +384,12 @@
         button:disabled { color: #aaa; background: #555; cursor: not-allowed; }
       </style>
       <div class="shell">
-        <section class="box" role="dialog" aria-label="Current Conversation Exporter">
+        <section class="box" role="dialog" aria-label="ChatGPT 当前会话导出器">
           <div class="header">
-            <div class="title">Current Conversation Exporter</div>
+            <div class="title">ChatGPT 当前会话导出器</div>
             <button class="close" type="button" aria-label="关闭导出器">×</button>
           </div>
           <div class="state"></div>
-          <div class="meta">Platform: <span class="platform"></span></div>
           <div class="meta">Conversation ID: <span class="id"></span></div>
           <div class="meta">Title: <span class="conversation-title"></span></div>
           <div class="detail"></div>
@@ -453,7 +399,6 @@
       </div>`;
     const box = {
       state: shadow.querySelector(".state"),
-      platform: shadow.querySelector(".platform"),
       id: shadow.querySelector(".id"),
       title: shadow.querySelector(".conversation-title"),
       detail: shadow.querySelector(".detail"),
@@ -490,21 +435,6 @@
     if (event.data.type === "observer-status") mergeObserverDiagnostics(event.data.diagnostics);
     if (event.data.type === "conversation-response") capture(event.data.payload);
     if (event.data.type === "conversation-message-page") captureMessagePage(event.data.conversationId, event.data.payload, event.data.pageKey);
-    if (event.data.type === "gemini-structure") mergeObserverDiagnostics({
-      ...event.data.report,
-      geminiConversationCandidates: event.data.report && event.data.report.possibleCandidate ? runtimeDiagnostics.geminiConversationCandidates : runtimeDiagnostics.geminiConversationCandidates,
-      geminiLastTopLevelKeys: event.data.report && event.data.report.topLevelKeys,
-      geminiLastWrapperDepth: event.data.report && event.data.report.wrapperDepth,
-      geminiLastTurnCount: event.data.report && event.data.report.possibleTurnCount,
-      geminiLastUserMessages: event.data.report && event.data.report.possibleUserMessages,
-      geminiLastAssistantMessages: event.data.report && event.data.report.possibleAssistantMessages,
-      geminiPaginationDetected: event.data.report && event.data.report.paginationDetected,
-      geminiPaginationSignals: event.data.report && event.data.report.paginationSignals,
-      geminiCompleteness: event.data.report && event.data.report.completeness,
-      geminiSchemaVerified: event.data.report && event.data.report.schemaVerified,
-      geminiLastFieldHints: event.data.report && event.data.report.fieldHints,
-      geminiLastConversationId: event.data.report && event.data.report.conversationId
-    });
   });
 
   if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {

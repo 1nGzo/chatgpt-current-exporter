@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from .conversation import ConversationDocument, VisibleMessage
-from .model import NormalizedConversation, normalize_chatgpt
 
 
 def _value(value: object) -> str:
@@ -21,37 +20,6 @@ def _render_message(turn: int, message: VisibleMessage) -> str:
     lines.extend(["", message.body, "", "---", ""])
     return "\n".join(lines)
 
-
-def _render_normalized_message(turn: int, message) -> str:
-    metadata = message.metadata if isinstance(message.metadata, dict) else {}
-    message_id = message.platform_message_id or f"message-{turn}"
-    lines = [f"## Turn {turn:04d}｜{message.role.upper()}", "", f"- message_id：{message_id}"]
-    if metadata.get("message_id_source") not in (None, "message.id"):
-        lines.append(f"- message_id_source：{metadata['message_id_source']}")
-    lines.append(f"- active_path_index：{metadata.get('active_path_index', message.sequence)}")
-    lines.append(f"- create_time：{_value(message.timestamp)}")
-    if metadata.get("update_time") is not None:
-        lines.append(f"- update_time：{metadata['update_time']}")
-    lines.extend(["", message.text, "", "---", ""])
-    return "\n".join(lines)
-
-
-def render_normalized_markdown(conversation: NormalizedConversation) -> str:
-    """Render any verified platform adapter's normalized conversation."""
-    lines = [
-        f"# {conversation.title}",
-        "",
-        f"- platform：{conversation.platform}",
-        f"- conversation_id：{_value(conversation.conversation_id)}",
-        f"- source_url：{conversation.source_url}",
-        "",
-        "---",
-        "",
-    ]
-    lines.extend(_render_normalized_message(turn, message) for turn, message in enumerate(conversation.messages, 1))
-    return "\n".join(lines)
-
-
 def render_markdown(document: ConversationDocument) -> str:
     """Render only messages on ``document.active_path``.
 
@@ -60,8 +28,6 @@ def render_markdown(document: ConversationDocument) -> str:
     export.
     """
 
-    # Keep the established ChatGPT Markdown header byte-compatible while the
-    # normalized renderer is available to future platform adapters.
     stats = document.stats
     lines = [
         f"# {document.title}",

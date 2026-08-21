@@ -49,9 +49,6 @@
   }
 
   function isConversation(value) {
-    if (root.CCEChatGPTAdapter && typeof root.CCEChatGPTAdapter.isConversationCandidate === "function") {
-      return root.CCEChatGPTAdapter.isConversationCandidate(value);
-    }
     return hasMapping(value) || hasMessageList(value);
   }
 

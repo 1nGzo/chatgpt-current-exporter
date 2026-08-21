@@ -9,9 +9,6 @@ venv/
 exports/
 *.raw.json
 *.raw.json.*
-*.raw.bundle.json
-*.capture.json
-gemini-captures/
 *.tmp
 *.part
 .DS_Store
