@@ -18,7 +18,6 @@ assert.strictEqual(lengthPrefixed.frameCount, 1);
 assert.strictEqual(lengthPrefixed.innerPayloads, 1);
 assert.deepStrictEqual(Array.from(lengthPrefixed.rpcIds), ["hNvQHb"]);
 assert.strictEqual(lengthPrefixed.payloads.length, 1);
-assert.strictEqual(lengthPrefixed.payloadRecords[0].rpcId, "hNvQHb");
 const structuredBatchReport = context.CCEGeminiAdapter.inspectResponse(
   [[[["prompt text"], 1], ["rc_answer", ["assistant text"]]]],
   "https://gemini.google.com/u/1/_/BardChatUi/data/batchexecute",

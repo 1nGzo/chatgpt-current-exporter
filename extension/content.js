@@ -73,8 +73,6 @@
     geminiSchemaVerified: false,
     geminiLastFieldHints: [],
     geminiLastConversationId: null,
-    geminiLastRpcId: null,
-    geminiRpcSummaries: [],
     batchResponses: 0,
     batchFrames: 0,
     batchInnerPayloads: 0,
@@ -410,7 +408,7 @@
 
   function mergeObserverDiagnostics(info) {
     if (!info || typeof info !== "object") return;
-    for (const key of ["platform", "platformLabel", "injected", "fetchObserved", "xhrObserved", "jsonCandidates", "conversationCandidates", "jsonParseErrors", "streamResponses", "webSocketObserved", "webSocketMessages", "conversationEndpointObserved", "currentConversationEndpointResponses", "fallbackAttempts", "fallbackResponses", "fallbackConversationCandidates", "fallbackLastResult", "fallbackConfigured", "fallbackSkipReason", "fallbackLastEndpoint", "messagePageResponses", "messagePageCandidates", "messagePagePreviousTrue", "messagePagePreviousFalse", "messagePagePreviousUnknown", "messagePageNextTrue", "messagePageNextFalse", "messagePageNextUnknown", "cachedMessagePages", "lastMessagePageKeys", "lastContentType", "lastResponsePath", "observedResponsePaths", "cacheSize", "fetchHooked", "xhrHooked", "lastCandidatePath", "geminiConversationCandidates", "geminiLastTopLevelKeys", "geminiLastWrapperDepth", "geminiLastTurnCount", "geminiLastUserMessages", "geminiLastAssistantMessages", "geminiPaginationDetected", "geminiPaginationSignals", "geminiCompleteness", "geminiSchemaVerified", "geminiLastFieldHints", "geminiLastConversationId", "geminiLastRpcId", "geminiRpcSummaries", "batchResponses", "batchFrames", "batchInnerPayloads", "batchParseFailures", "batchRpcIds"]) {
+    for (const key of ["platform", "platformLabel", "injected", "fetchObserved", "xhrObserved", "jsonCandidates", "conversationCandidates", "jsonParseErrors", "streamResponses", "webSocketObserved", "webSocketMessages", "conversationEndpointObserved", "currentConversationEndpointResponses", "fallbackAttempts", "fallbackResponses", "fallbackConversationCandidates", "fallbackLastResult", "fallbackConfigured", "fallbackSkipReason", "fallbackLastEndpoint", "messagePageResponses", "messagePageCandidates", "messagePagePreviousTrue", "messagePagePreviousFalse", "messagePagePreviousUnknown", "messagePageNextTrue", "messagePageNextFalse", "messagePageNextUnknown", "cachedMessagePages", "lastMessagePageKeys", "lastContentType", "lastResponsePath", "observedResponsePaths", "cacheSize", "fetchHooked", "xhrHooked", "lastCandidatePath", "geminiConversationCandidates", "geminiLastTopLevelKeys", "geminiLastWrapperDepth", "geminiLastTurnCount", "geminiLastUserMessages", "geminiLastAssistantMessages", "geminiPaginationDetected", "geminiPaginationSignals", "geminiCompleteness", "geminiSchemaVerified", "geminiLastFieldHints", "geminiLastConversationId", "batchResponses", "batchFrames", "batchInnerPayloads", "batchParseFailures", "batchRpcIds"]) {
       if (info[key] !== undefined) runtimeDiagnostics[key] = info[key];
     }
     if (Array.isArray(info.lastDetectedKeys)) runtimeDiagnostics.lastDetectedKeys = info.lastDetectedKeys.slice(0, 80);
@@ -420,7 +418,6 @@
     if (Array.isArray(info.geminiPaginationSignals)) runtimeDiagnostics.geminiPaginationSignals = info.geminiPaginationSignals.slice(0, 20);
     if (Array.isArray(info.geminiLastFieldHints)) runtimeDiagnostics.geminiLastFieldHints = info.geminiLastFieldHints.slice(0, 40);
     if (Array.isArray(info.batchRpcIds)) runtimeDiagnostics.batchRpcIds = info.batchRpcIds.slice(-40);
-    if (Array.isArray(info.geminiRpcSummaries)) runtimeDiagnostics.geminiRpcSummaries = info.geminiRpcSummaries.slice(-30);
     if (info.lastSchema && typeof info.lastSchema === "object") runtimeDiagnostics.lastSchema = { ...runtimeDiagnostics.lastSchema, ...info.lastSchema };
     if (info.lastEndpointSchema && typeof info.lastEndpointSchema === "object") runtimeDiagnostics.lastEndpointSchema = { ...runtimeDiagnostics.lastEndpointSchema, ...info.lastEndpointSchema };
     updatePanel();
