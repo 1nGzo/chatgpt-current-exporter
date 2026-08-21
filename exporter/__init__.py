@@ -1,3 +1,3 @@
 """Local ChatGPT conversation export and active-path reconstruction."""
 
-__all__ = ["conversation", "markdown", "naming"]
+__all__ = ["adapters", "conversation", "markdown", "model", "naming"]

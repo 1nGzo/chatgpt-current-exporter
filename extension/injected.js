@@ -4,7 +4,14 @@
   if (window.__CCE_REQUEST_OBSERVER__) return;
   window.__CCE_REQUEST_OBSERVER__ = true;
   const SOURCE = "chatgpt-current-exporter";
+  const platformCore = globalThis.CCEPlatformCore;
+  const platform = platformCore && typeof platformCore.detectPlatform === "function"
+    ? platformCore.detectPlatform(window.location.href)
+    : "chatgpt";
+  const geminiAdapter = globalThis.CCEGeminiAdapter;
   const diagnostics = {
+    platform,
+    platformLabel: platformCore && typeof platformCore.definition === "function" ? platformCore.definition(platform).label : platform,
     injected: true,
     fetchHooked: false,
     xhrHooked: false,
@@ -44,7 +51,19 @@
     lastContentType: "",
     lastResponsePath: "",
     observedResponsePaths: [],
-    cacheSize: 0
+    cacheSize: 0,
+    geminiConversationCandidates: 0,
+    geminiLastTopLevelKeys: [],
+    geminiLastWrapperDepth: null,
+    geminiLastTurnCount: 0,
+    geminiLastUserMessages: 0,
+    geminiLastAssistantMessages: 0,
+    geminiPaginationDetected: false,
+    geminiPaginationSignals: [],
+    geminiCompleteness: "UNKNOWN",
+    geminiSchemaVerified: false,
+    geminiLastFieldHints: [],
+    geminiLastConversationId: null
   };
   const cache = new Map();
   const cacheOrder = [];
@@ -92,6 +111,9 @@
   }
 
   function currentPageConversationId() {
+    if (platform === "gemini" && platformCore && typeof platformCore.conversationIdHint === "function") {
+      return platformCore.conversationIdHint(window.location.href, platform);
+    }
     try {
       const parts = new URL(window.location.href).pathname.split("/").filter(Boolean);
       const index = parts.lastIndexOf("c");
@@ -259,6 +281,30 @@
     diagnostics.lastDetectedKeys = safeKeys(payload);
     diagnostics.lastContentType = String(contentType || "");
     if (responsePath) diagnostics.lastResponsePath = responsePath;
+    if (platform === "gemini") {
+      const report = geminiAdapter && typeof geminiAdapter.inspectResponse === "function"
+        ? geminiAdapter.inspectResponse(payload, safePath(responsePath), currentPageConversationId())
+        : { topLevelKeys: safeKeys(payload), completeness: "UNKNOWN", possibleCandidate: false };
+      diagnostics.geminiLastTopLevelKeys = Array.isArray(report.topLevelKeys) ? report.topLevelKeys.slice(0, 80) : [];
+      diagnostics.geminiLastWrapperDepth = report.wrapperDepth === undefined ? null : report.wrapperDepth;
+      diagnostics.geminiLastTurnCount = report.possibleTurnCount || 0;
+      diagnostics.geminiLastUserMessages = report.possibleUserMessages || 0;
+      diagnostics.geminiLastAssistantMessages = report.possibleAssistantMessages || 0;
+      diagnostics.geminiPaginationDetected = Boolean(report.paginationDetected);
+      diagnostics.geminiPaginationSignals = Array.isArray(report.paginationSignals) ? report.paginationSignals.slice(0, 20) : [];
+      diagnostics.geminiCompleteness = report.completeness || "UNKNOWN";
+      diagnostics.geminiSchemaVerified = Boolean(report.schemaVerified);
+      diagnostics.geminiLastFieldHints = Array.isArray(report.fieldHints) ? report.fieldHints.slice(0, 40) : [];
+      diagnostics.geminiLastConversationId = report.conversationId || currentPageConversationId() || null;
+      if (report.possibleCandidate) diagnostics.geminiConversationCandidates += 1;
+      window.postMessage({ source: SOURCE, type: "gemini-structure", report: {
+        ...report,
+        platform,
+        transport: String(transport || "unknown")
+      } }, "*");
+      publishStatus();
+      return;
+    }
     const payloadSchema = schema(payload);
     if (payloadSchema.schemaType !== "none") {
       diagnostics.lastSchema = payloadSchema;
@@ -432,6 +478,11 @@
   }
 
   function attemptVerifiedFallback() {
+    if (platform !== "chatgpt") {
+      diagnostics.fallbackSkipReason = "platform-adapter-does-not-provide-fallback";
+      publishStatus();
+      return;
+    }
     const config = fallbackConfig();
     const conversationId = currentPageConversationId();
     if (!config) {

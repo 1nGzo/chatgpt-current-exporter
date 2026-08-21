@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Current Conversation Exporter",
+  "name": "Current Conversation Exporter",
   "version": "0.1.0",
-  "description": "Capture the current ChatGPT conversation response locally and export raw JSON plus active-path Markdown.",
+  "description": "Capture the current supported web conversation locally and export raw JSON plus Markdown.",
   "action": {
     "default_title": "导出当前会话",
     "default_popup": "popup.html"
@@ -11,9 +11,10 @@
     {
       "matches": [
         "https://chatgpt.com/*",
-        "https://chat.openai.com/*"
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*"
       ],
-      "js": ["fallback-config.js", "injected.js"],
+      "js": ["core/platform.js", "adapters/gemini.js", "fallback-config.js", "injected.js"],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": false
@@ -21,9 +22,14 @@
     {
       "matches": [
         "https://chatgpt.com/*",
-        "https://chat.openai.com/*"
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*"
       ],
       "js": [
+        "core/platform.js",
+        "core/normalized.js",
+        "adapters/chatgpt.js",
+        "adapters/gemini.js",
         "converter.js",
         "content.js"
       ],
@@ -37,7 +43,8 @@
       "resources": ["injected.js"],
       "matches": [
         "https://chatgpt.com/*",
-        "https://chat.openai.com/*"
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*"
       ]
     }
   ],

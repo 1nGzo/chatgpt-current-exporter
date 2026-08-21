@@ -2,6 +2,7 @@
   "use strict";
 
   const state = document.getElementById("state");
+  const platform = document.getElementById("platform");
   const id = document.getElementById("conversation-id");
   const title = document.getElementById("conversation-title");
   const captured = document.getElementById("captured");
@@ -24,12 +25,22 @@
     const d = snapshot && snapshot.diagnostics ? snapshot.diagnostics : {};
     return [
       `Extension: ${snapshot && snapshot.extension ? "YES" : "NO"}`,
+      `Platform: ${d.platformLabel || d.platform || (snapshot && snapshot.platformLabel) || (snapshot && snapshot.platform) || "—"}`,
       `Injected: ${d.injected ? "YES" : "NO"}`,
       `Current URL: ${d.currentUrl || "—"}`,
       `Fetch observed: ${d.fetchObserved || 0}`,
       `XHR observed: ${d.xhrObserved || 0}`,
       `JSON candidates: ${d.jsonCandidates || 0}`,
       `Conversation candidates: ${d.conversationCandidates || 0}`,
+      d.platform === "gemini" ? `Gemini possible candidates (unverified): ${d.geminiConversationCandidates || 0}` : "",
+      d.platform === "gemini" ? `Gemini wrapper depth: ${d.geminiLastWrapperDepth === null || d.geminiLastWrapperDepth === undefined ? "—" : d.geminiLastWrapperDepth}` : "",
+      d.platform === "gemini" ? `Possible turns: ${d.geminiLastTurnCount || 0}` : "",
+      d.platform === "gemini" ? `Possible user messages: ${d.geminiLastUserMessages || 0}` : "",
+      d.platform === "gemini" ? `Possible assistant messages: ${d.geminiLastAssistantMessages || 0}` : "",
+      d.platform === "gemini" ? `Completeness: ${d.geminiCompleteness || "UNKNOWN"}` : "",
+      d.platform === "gemini" ? `Pagination detected: ${d.geminiPaginationDetected ? "YES" : "NO"}` : "",
+      d.platform === "gemini" && Array.isArray(d.geminiPaginationSignals) && d.geminiPaginationSignals.length ? `Pagination fields: ${d.geminiPaginationSignals.join(", ")}` : "",
+      d.platform === "gemini" ? `Last top-level keys: ${Array.isArray(d.geminiLastTopLevelKeys) && d.geminiLastTopLevelKeys.length ? d.geminiLastTopLevelKeys.join(", ") : "—"}` : "",
       `Last detected keys: ${Array.isArray(d.lastDetectedKeys) && d.lastDetectedKeys.length ? d.lastDetectedKeys.join(", ") : "—"}`,
       `Last candidate path: ${d.lastCandidatePath || "—"}`,
       `Conversation endpoint responses: ${d.currentConversationEndpointResponses || 0}`,
@@ -45,6 +56,8 @@
       `Message page keys: ${Array.isArray(d.lastMessagePageKeys) && d.lastMessagePageKeys.length ? d.lastMessagePageKeys.join(", ") : "—"}`,
       `Captured pages: ${snapshot && snapshot.pagesCaptured ? snapshot.pagesCaptured : 0} · pagination=${d.paginationState || (snapshot && snapshot.paginationState) || "—"}`,
       `Conversation id: ${d.conversationId || "—"}`,
+      d.platform === "gemini" ? `Gemini conversation id hint: ${d.geminiLastConversationId || "—"}` : "",
+      d.platform === "gemini" ? `Gemini field hints: ${Array.isArray(d.geminiLastFieldHints) && d.geminiLastFieldHints.length ? d.geminiLastFieldHints.join(", ") : "—"}` : "",
       `Schema: ${d.lastParsedSchemaVariant || (d.lastSchema && d.lastSchema.schemaType) || "—"}`,
       `Parsed: mapping ${d.lastParsedStats ? d.lastParsedStats.mappingNodes : 0} / active path ${d.lastParsedStats ? d.lastParsedStats.activePathNodes : 0} / excluded branch ${d.lastParsedStats ? d.lastParsedStats.excludedBranchNodes : 0} / messages ${d.lastParsedStats ? d.lastParsedStats.visibleMessages : 0}`,
       `Page info: ${d.lastPageInfo && Array.isArray(d.lastPageInfo.keys) && d.lastPageInfo.keys.length ? d.lastPageInfo.keys.join(", ") : "—"} · has_previous_page=${d.lastPageInfo && d.lastPageInfo.hasPreviousPage !== null ? d.lastPageInfo.hasPreviousPage : "—"} · has_next_page=${d.lastPageInfo && d.lastPageInfo.hasNextPage !== null ? d.lastPageInfo.hasNextPage : "—"} · has_more=${d.lastPageInfo && d.lastPageInfo.hasMore !== null ? d.lastPageInfo.hasMore : "—"} · end_cursor=${d.lastPageInfo && d.lastPageInfo.endCursorPresent ? "YES" : "NO"}`,
@@ -79,10 +92,15 @@
   function show(snapshot) {
     state.style.color = snapshot.state === "Ready" ? "#146c43" : snapshot.state === "Error" ? "#a33" : "#865b00";
     state.textContent = snapshot.state === "Ready" ? "Ready（完整性仍需实际验证）" : snapshot.state === "Review" ? "Review（有未识别字段，请检查诊断）" : snapshot.state;
+    platform.textContent = snapshot.platformLabel || snapshot.platform || "—";
     id.textContent = snapshot.conversationId || "—";
     title.textContent = snapshot.title || "—";
     captured.textContent = snapshot.capturedAt || "—";
-    stats.textContent = snapshot.captured ? `mapping ${snapshot.mappingNodes} · active path ${snapshot.activePathNodes} · messages ${snapshot.activePathMessages} · raw ${snapshot.rawJsonSize} bytes` : "—";
+    stats.textContent = snapshot.captured
+      ? `mapping ${snapshot.mappingNodes} · active path ${snapshot.activePathNodes} · messages ${snapshot.activePathMessages} · raw ${snapshot.rawJsonSize} bytes`
+      : snapshot.platform === "gemini"
+        ? `JSON ${snapshot.diagnostics.geminiLastTurnCount || 0} possible turns · completeness ${snapshot.diagnostics.geminiCompleteness || "UNKNOWN"}`
+        : "—";
     diagnostics.textContent = formatDiagnostics(snapshot);
     button.disabled = !snapshot.captured || snapshot.incompleteReasons.length > 0 || snapshot.activePathMessages === 0;
     rescan.disabled = false;
@@ -91,7 +109,7 @@
   function refreshStatus() {
     if (tabId === null) return;
     chrome.tabs.sendMessage(tabId, { type: "GET_STATUS" }, (snapshot) => {
-      if (chrome.runtime.lastError || !snapshot) return showError("请在 ChatGPT 会话页刷新后重试");
+      if (chrome.runtime.lastError || !snapshot) return showError("请在支持的平台会话页刷新后重试");
       show(snapshot);
     });
   }
@@ -101,7 +119,7 @@
     if (!tab || tab.id === undefined) return showError("没有找到当前标签页", tab && tab.url ? safeUrl(tab.url) : null);
     tabId = tab.id;
     chrome.tabs.sendMessage(tabId, { type: "GET_STATUS" }, (snapshot) => {
-      if (chrome.runtime.lastError || !snapshot) return showError("请在 ChatGPT 会话页刷新后重试", tab.url ? safeUrl(tab.url) : null);
+      if (chrome.runtime.lastError || !snapshot) return showError("请在支持的平台会话页刷新后重试", tab.url ? safeUrl(tab.url) : null);
       show(snapshot);
     });
   });
