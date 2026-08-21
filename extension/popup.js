@@ -70,6 +70,8 @@
       `WebSocket messages: ${d.webSocketMessages || 0}`,
       d.platform === "gemini" ? `Batch responses: ${d.batchResponses || 0}` : "",
       d.platform === "gemini" ? `Batch frames: ${d.batchFrames || 0}` : "",
+      d.platform === "gemini" ? `Batch inner payloads: ${d.batchInnerPayloads || 0}` : "",
+      d.platform === "gemini" ? `Batch RPC IDs: ${Array.isArray(d.batchRpcIds) && d.batchRpcIds.length ? d.batchRpcIds.join(", ") : "—"}` : "",
       d.platform === "gemini" ? `Batch parse failures: ${d.batchParseFailures || 0}` : "",
       `JSON parse errors: ${d.jsonParseErrors || 0}`,
       `ID mismatches: ${d.rejectedIdMismatches || 0}`,

@@ -13,6 +13,20 @@ assert.strictEqual(context.CCEPlatformCore.detectPlatform("https://gemini.google
 assert.strictEqual(context.CCEPlatformCore.conversationIdHint("https://gemini.google.com/u/1/app/example", "gemini"), "example");
 const batchFrames = context.CCEGeminiAdapter.parseStructuredText(")]}'\n[[\"fixture\",{\"role\":\"user\"}]]");
 assert.strictEqual(batchFrames.length, 1);
+const lengthPrefixed = context.CCEGeminiAdapter.parseStructuredTextReport(")]}'\n42\n[[\"wrb.fr\",\"hNvQHb\",\"[{\\\"role\\\":\\\"user\\\"},{\\\"role\\\":\\\"model\\\"}]\"]]");
+assert.strictEqual(lengthPrefixed.frameCount, 1);
+assert.strictEqual(lengthPrefixed.innerPayloads, 1);
+assert.deepStrictEqual(Array.from(lengthPrefixed.rpcIds), ["hNvQHb"]);
+assert.strictEqual(lengthPrefixed.payloads.length, 1);
+const structuredBatchReport = context.CCEGeminiAdapter.inspectResponse(
+  [[[["prompt text"], 1], ["rc_answer", ["assistant text"]]]],
+  "https://gemini.google.com/u/1/_/BardChatUi/data/batchexecute",
+  "example"
+);
+assert.strictEqual(structuredBatchReport.possibleCandidate, true);
+assert.strictEqual(structuredBatchReport.possibleUserMessages, 1);
+assert.strictEqual(structuredBatchReport.possibleAssistantMessages, 1);
+assert.strictEqual(structuredBatchReport.possibleTurnCount, 1);
 const batchReport = context.CCEGeminiAdapter.inspectResponse(
   [["wrb.fr", "[{\"role\":\"user\"},{\"role\":\"model\"}]"]],
   "https://gemini.google.com/u/1/_/BardChatUi/data/batchexecute",

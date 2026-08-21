@@ -66,7 +66,9 @@
     geminiLastConversationId: null,
     batchResponses: 0,
     batchFrames: 0,
-    batchParseFailures: 0
+    batchInnerPayloads: 0,
+    batchParseFailures: 0,
+    batchRpcIds: []
   };
   const cache = new Map();
   const cacheOrder = [];
@@ -349,20 +351,26 @@
   }
 
   function observeStructuredText(text, transport, contentType, responsePath) {
-    const payloads = geminiAdapter && typeof geminiAdapter.parseStructuredText === "function"
-      ? geminiAdapter.parseStructuredText(text)
-      : [];
+    const report = geminiAdapter && typeof geminiAdapter.parseStructuredTextReport === "function"
+      ? geminiAdapter.parseStructuredTextReport(text)
+      : { payloads: [], frameCount: 0, innerPayloads: 0, parseFailures: 1, rpcIds: [] };
+    const payloads = Array.isArray(report.payloads) ? report.payloads : [];
     payloads.forEach((payload) => observePayload(payload, transport, contentType, responsePath));
     const parsed = payloads.length;
     if (isGeminiBatchPath(responsePath)) {
       diagnostics.batchResponses += 1;
-      diagnostics.batchFrames += parsed;
-      if (!parsed) diagnostics.batchParseFailures += 1;
+      diagnostics.batchFrames += Number(report.frameCount) || 0;
+      diagnostics.batchInnerPayloads += Number(report.innerPayloads) || 0;
+      diagnostics.batchParseFailures += Number(report.parseFailures) || 0;
+      if (Array.isArray(report.rpcIds)) {
+        diagnostics.batchRpcIds = Array.from(new Set(diagnostics.batchRpcIds.concat(report.rpcIds))).slice(-40);
+      }
     }
-    if (!parsed) {
+    if (!parsed && !(Number(report.frameCount) > 0)) {
       diagnostics.jsonParseErrors += 1;
       publishStatus();
     }
+    if (isGeminiBatchPath(responsePath)) publishStatus();
   }
 
   function observeStreamText(text, transport, contentType, responsePath) {

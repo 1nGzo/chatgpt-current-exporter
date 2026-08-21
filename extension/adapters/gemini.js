@@ -29,6 +29,33 @@
     return null;
   }
 
+  function stringLeaves(value, output = []) {
+    if (output.length >= 80) return output;
+    if (typeof value === "string") {
+      if (value.trim()) output.push(value);
+      return output;
+    }
+    if (Array.isArray(value)) {
+      value.slice(0, 80).forEach((item) => stringLeaves(item, output));
+    }
+    return output;
+  }
+
+  function looksLikeInternalId(value) {
+    return /^(?:c_|rc_|r_)[A-Za-z0-9_-]{6,}$/.test(String(value || "").trim());
+  }
+
+  function isGeminiUserNode(value) {
+    if (!Array.isArray(value) || value.length < 2 || !Array.isArray(value[0]) || typeof value[1] !== "number") return false;
+    if (value[1] !== 1 && value[1] !== 2) return false;
+    return stringLeaves(value[0]).some((item) => !looksLikeInternalId(item));
+  }
+
+  function isGeminiAssistantNode(value) {
+    if (!Array.isArray(value) || value.length < 2 || typeof value[0] !== "string" || !Array.isArray(value[1])) return false;
+    return /^(?:rc_|r_|response[_-])/i.test(value[0]);
+  }
+
   function likelyTurnItem(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
     return Boolean(roleOf(value)) || objectKeys(value).some((key) => TURN_KEY_HINT.test(key));
@@ -46,7 +73,7 @@
     }
   }
 
-  function parseStructuredText(text) {
+  function parseJsonCandidates(text) {
     const raw = String(text || "").replace(/^\uFEFF/, "");
     const stripped = raw.replace(/^\s*\)\]\}',?\s*/, "").trim();
     const candidates = [stripped];
@@ -74,6 +101,87 @@
     return parsed;
   }
 
+  function parseBatchExecute(text) {
+    const raw = String(text || "").replace(/^\uFEFF/, "");
+    const stripped = raw.replace(/^\s*\)\]\}',?\s*/, "").trim();
+    const lines = stripped.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const payloads = [];
+    const rpcIds = new Set();
+    let frameCount = 0;
+    let innerPayloads = 0;
+    let parseFailures = 0;
+    let lengthPrefixed = false;
+    let recognizedEnvelope = false;
+
+    for (let index = 0; index < lines.length;) {
+      let line = lines[index++];
+      if (/^\d+$/.test(line) && index < lines.length) {
+        lengthPrefixed = true;
+        line = lines[index++];
+      }
+      let segment;
+      try {
+        segment = JSON.parse(line);
+      } catch (_) {
+        parseFailures += 1;
+        continue;
+      }
+      frameCount += 1;
+      const entries = Array.isArray(segment)
+        ? segment.filter((entry) => Array.isArray(entry) && entry[0] === "wrb.fr")
+        : [];
+      if (!entries.length) {
+        payloads.push(segment);
+        continue;
+      }
+      recognizedEnvelope = true;
+      for (const entry of entries) {
+        const rpcId = typeof entry[1] === "string" ? entry[1] : "";
+        if (rpcId) rpcIds.add(rpcId);
+        const nested = entry[2];
+        if (typeof nested === "string") {
+          try {
+            payloads.push(JSON.parse(nested));
+            innerPayloads += 1;
+          } catch (_) {
+            parseFailures += 1;
+          }
+        } else if (nested && typeof nested === "object") {
+          payloads.push(nested);
+          innerPayloads += 1;
+        }
+      }
+    }
+    return {
+      payloads,
+      frameCount,
+      innerPayloads,
+      parseFailures,
+      lengthPrefixed,
+      recognizedEnvelope,
+      rpcIds: Array.from(rpcIds).slice(0, 40)
+    };
+  }
+
+  function parseStructuredTextReport(text) {
+    const batch = parseBatchExecute(text);
+    if (batch.lengthPrefixed || batch.recognizedEnvelope) return batch;
+    const payloads = parseJsonCandidates(text);
+    return {
+      payloads,
+      frameCount: payloads.length,
+      innerPayloads: 0,
+      parseFailures: payloads.length ? 0 : 1,
+      lengthPrefixed: false,
+      recognizedEnvelope: false,
+      rpcIds: []
+    };
+  }
+
+  function parseStructuredText(text) {
+    return parseStructuredTextReport(text).payloads;
+  }
+
   function inspectResponse(payload, responsePath, urlHint) {
     const queue = [{ value: payload, depth: 0, path: "$" }];
     const seen = new Set();
@@ -85,6 +193,8 @@
     let possibleTurnCount = 0;
     let possibleUserMessages = 0;
     let possibleAssistantMessages = 0;
+    let structuredUserMessages = 0;
+    let structuredAssistantMessages = 0;
     let conversationId = urlHint || null;
     let paginationDetected = false;
     const paginationSignals = new Set();
@@ -96,6 +206,20 @@
       seen.add(value);
       nodesVisited += 1;
       maxDepth = Math.max(maxDepth, current.depth);
+      const structuredUser = isGeminiUserNode(value);
+      const structuredAssistant = isGeminiAssistantNode(value);
+      if (structuredUser) {
+        structuredUserMessages += 1;
+        possibleUserMessages += 1;
+        fieldHints.add("gemini-user-node");
+        if (wrapperDepth === null) wrapperDepth = current.depth;
+      }
+      if (structuredAssistant) {
+        structuredAssistantMessages += 1;
+        possibleAssistantMessages += 1;
+        fieldHints.add("gemini-assistant-node");
+        if (wrapperDepth === null) wrapperDepth = current.depth;
+      }
       if (Array.isArray(value)) {
         value.slice(0, 80).forEach((item, index) => {
           if (item && typeof item === "object") {
@@ -145,7 +269,7 @@
       maxDepth,
       nodesVisited,
       fieldHints: Array.from(fieldHints).slice(0, 40),
-      possibleTurnCount,
+      possibleTurnCount: Math.max(possibleTurnCount, Math.min(structuredUserMessages, structuredAssistantMessages)),
       possibleUserMessages,
       possibleAssistantMessages,
       conversationId,
@@ -160,6 +284,7 @@
   root.CCEGeminiAdapter = Object.freeze({
     id: "gemini",
     parseStructuredText,
+    parseStructuredTextReport,
     inspectResponse,
     schemaVerified: false,
     exportSupported: false
