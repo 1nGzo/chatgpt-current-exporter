@@ -10,7 +10,17 @@ for (const file of ["extension/core/platform.js", "extension/adapters/gemini.js"
 
 assert.strictEqual(context.CCEPlatformCore.detectPlatform("https://chatgpt.com/c/example"), "chatgpt");
 assert.strictEqual(context.CCEPlatformCore.detectPlatform("https://gemini.google.com/app/example"), "gemini");
-assert.strictEqual(context.CCEPlatformCore.conversationIdHint("https://gemini.google.com/app/example", "gemini"), "example");
+assert.strictEqual(context.CCEPlatformCore.conversationIdHint("https://gemini.google.com/u/1/app/example", "gemini"), "example");
+const batchFrames = context.CCEGeminiAdapter.parseStructuredText(")]}'\n[[\"fixture\",{\"role\":\"user\"}]]");
+assert.strictEqual(batchFrames.length, 1);
+const batchReport = context.CCEGeminiAdapter.inspectResponse(
+  [["wrb.fr", "[{\"role\":\"user\"},{\"role\":\"model\"}]"]],
+  "https://gemini.google.com/u/1/_/BardChatUi/data/batchexecute",
+  "example"
+);
+assert.strictEqual(batchReport.possibleCandidate, true);
+assert.strictEqual(batchReport.possibleUserMessages, 1);
+assert.strictEqual(batchReport.possibleAssistantMessages, 1);
 
 const possibleConversation = {
   data: {

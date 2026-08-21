@@ -4,9 +4,17 @@
   const SOURCE = "chatgpt-current-exporter";
   const converter = globalThis.CCEConversationConverter;
   const platformCore = globalThis.CCEPlatformCore;
+  function fallbackPlatformId() {
+    try {
+      const hostname = new URL(window.location.href).hostname.toLowerCase();
+      return hostname === "gemini.google.com" || hostname.endsWith(".gemini.google.com") ? "gemini" : "chatgpt";
+    } catch (_) {
+      return "chatgpt";
+    }
+  }
   const platformId = platformCore && typeof platformCore.detectPlatform === "function"
     ? platformCore.detectPlatform(window.location.href)
-    : "chatgpt";
+    : fallbackPlatformId();
   const platformDefinition = platformCore && typeof platformCore.definition === "function"
     ? platformCore.definition(platformId)
     : { id: platformId, label: platformId };
@@ -64,7 +72,10 @@
     geminiCompleteness: "UNKNOWN",
     geminiSchemaVerified: false,
     geminiLastFieldHints: [],
-    geminiLastConversationId: null
+    geminiLastConversationId: null,
+    batchResponses: 0,
+    batchFrames: 0,
+    batchParseFailures: 0
   };
   let currentId = currentConversationId();
   let lastError = "";
@@ -86,6 +97,15 @@
   function currentConversationId() {
     if (platformId === "gemini" && platformCore && typeof platformCore.conversationIdHint === "function") {
       return platformCore.conversationIdHint(window.location.href, platformId);
+    }
+    if (platformId === "gemini") {
+      try {
+        const parts = new URL(window.location.href).pathname.split("/").filter(Boolean);
+        const appIndex = parts.lastIndexOf("app");
+        return appIndex >= 0 && parts[appIndex + 1] ? decodeURIComponent(parts[appIndex + 1]) : null;
+      } catch (_) {
+        return null;
+      }
     }
     try {
       const parts = new URL(window.location.href).pathname.split("/").filter(Boolean);
@@ -386,7 +406,7 @@
 
   function mergeObserverDiagnostics(info) {
     if (!info || typeof info !== "object") return;
-    for (const key of ["platform", "platformLabel", "injected", "fetchObserved", "xhrObserved", "jsonCandidates", "conversationCandidates", "jsonParseErrors", "streamResponses", "webSocketObserved", "webSocketMessages", "conversationEndpointObserved", "currentConversationEndpointResponses", "fallbackAttempts", "fallbackResponses", "fallbackConversationCandidates", "fallbackLastResult", "fallbackConfigured", "fallbackSkipReason", "fallbackLastEndpoint", "messagePageResponses", "messagePageCandidates", "messagePagePreviousTrue", "messagePagePreviousFalse", "messagePagePreviousUnknown", "messagePageNextTrue", "messagePageNextFalse", "messagePageNextUnknown", "cachedMessagePages", "lastMessagePageKeys", "lastContentType", "lastResponsePath", "observedResponsePaths", "cacheSize", "fetchHooked", "xhrHooked", "lastCandidatePath", "geminiConversationCandidates", "geminiLastTopLevelKeys", "geminiLastWrapperDepth", "geminiLastTurnCount", "geminiLastUserMessages", "geminiLastAssistantMessages", "geminiPaginationDetected", "geminiPaginationSignals", "geminiCompleteness", "geminiSchemaVerified", "geminiLastFieldHints", "geminiLastConversationId"]) {
+    for (const key of ["platform", "platformLabel", "injected", "fetchObserved", "xhrObserved", "jsonCandidates", "conversationCandidates", "jsonParseErrors", "streamResponses", "webSocketObserved", "webSocketMessages", "conversationEndpointObserved", "currentConversationEndpointResponses", "fallbackAttempts", "fallbackResponses", "fallbackConversationCandidates", "fallbackLastResult", "fallbackConfigured", "fallbackSkipReason", "fallbackLastEndpoint", "messagePageResponses", "messagePageCandidates", "messagePagePreviousTrue", "messagePagePreviousFalse", "messagePagePreviousUnknown", "messagePageNextTrue", "messagePageNextFalse", "messagePageNextUnknown", "cachedMessagePages", "lastMessagePageKeys", "lastContentType", "lastResponsePath", "observedResponsePaths", "cacheSize", "fetchHooked", "xhrHooked", "lastCandidatePath", "geminiConversationCandidates", "geminiLastTopLevelKeys", "geminiLastWrapperDepth", "geminiLastTurnCount", "geminiLastUserMessages", "geminiLastAssistantMessages", "geminiPaginationDetected", "geminiPaginationSignals", "geminiCompleteness", "geminiSchemaVerified", "geminiLastFieldHints", "geminiLastConversationId", "batchResponses", "batchFrames", "batchParseFailures"]) {
       if (info[key] !== undefined) runtimeDiagnostics[key] = info[key];
     }
     if (Array.isArray(info.lastDetectedKeys)) runtimeDiagnostics.lastDetectedKeys = info.lastDetectedKeys.slice(0, 80);

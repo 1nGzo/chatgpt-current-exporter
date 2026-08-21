@@ -63,7 +63,10 @@
     geminiCompleteness: "UNKNOWN",
     geminiSchemaVerified: false,
     geminiLastFieldHints: [],
-    geminiLastConversationId: null
+    geminiLastConversationId: null,
+    batchResponses: 0,
+    batchFrames: 0,
+    batchParseFailures: 0
   };
   const cache = new Map();
   const cacheOrder = [];
@@ -341,6 +344,27 @@
     }
   }
 
+  function isGeminiBatchPath(responsePath) {
+    return platform === "gemini" && /\/batchexecute(?:$|[?#])/.test(String(responsePath || ""));
+  }
+
+  function observeStructuredText(text, transport, contentType, responsePath) {
+    const payloads = geminiAdapter && typeof geminiAdapter.parseStructuredText === "function"
+      ? geminiAdapter.parseStructuredText(text)
+      : [];
+    payloads.forEach((payload) => observePayload(payload, transport, contentType, responsePath));
+    const parsed = payloads.length;
+    if (isGeminiBatchPath(responsePath)) {
+      diagnostics.batchResponses += 1;
+      diagnostics.batchFrames += parsed;
+      if (!parsed) diagnostics.batchParseFailures += 1;
+    }
+    if (!parsed) {
+      diagnostics.jsonParseErrors += 1;
+      publishStatus();
+    }
+  }
+
   function observeStreamText(text, transport, contentType, responsePath) {
     for (const line of String(text || "").split(/\r?\n/)) {
       const match = /^data:\s*(.+)$/.exec(line);
@@ -373,7 +397,12 @@
           const contentType = response.headers && response.headers.get("content-type");
           const responsePath = rememberPath(response.url);
           diagnostics.lastContentType = String(contentType || "");
-          if (isJsonContentType(contentType) || !contentType) {
+          if (isGeminiBatchPath(responsePath)) {
+            response.clone().text().then((text) => observeStructuredText(text, "fetch-batch", contentType, responsePath)).catch(() => {
+              diagnostics.batchParseFailures += 1;
+              publishStatus();
+            });
+          } else if (isJsonContentType(contentType) || !contentType) {
             response.clone().json().then((payload) => observePayload(payload, "fetch", contentType, responsePath)).catch(() => {
               diagnostics.jsonParseErrors += 1;
               publishStatus();
@@ -413,7 +442,20 @@
           const contentType = this.getResponseHeader("content-type") || "";
           const responsePath = rememberPath(this.responseURL || this.__CCE_REQUEST_URL__);
           diagnostics.lastContentType = String(contentType);
-          if (this.responseType === "json") {
+          if (isGeminiBatchPath(responsePath)) {
+            if (typeof this.responseText === "string" && this.responseText) {
+              observeStructuredText(this.responseText, "xhr-batch", contentType, responsePath);
+            } else if (this.response && typeof this.response === "object") {
+              observePayload(this.response, "xhr-batch", contentType, responsePath);
+              diagnostics.batchResponses += 1;
+              diagnostics.batchFrames += 1;
+              publishStatus();
+            } else {
+              diagnostics.batchResponses += 1;
+              diagnostics.batchParseFailures += 1;
+              publishStatus();
+            }
+          } else if (this.responseType === "json") {
             observePayload(this.response, "xhr", contentType, responsePath);
           } else if (isStreamContentType(contentType)) {
             diagnostics.streamResponses += 1;
