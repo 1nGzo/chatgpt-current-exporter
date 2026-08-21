@@ -47,9 +47,8 @@
       const index = parts.lastIndexOf("c");
       return index >= 0 && parts[index + 1] ? decodeSegment(parts[index + 1]) : null;
     }
-    if (platform === "gemini") {
-      const appIndex = parts.lastIndexOf("app");
-      if (appIndex >= 0 && parts[appIndex + 1]) return decodeSegment(parts[appIndex + 1]);
+    if (platform === "gemini" && parts[0] === "app" && parts[1]) {
+      return decodeSegment(parts[1]);
     }
     return null;
   }

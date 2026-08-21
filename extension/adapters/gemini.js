@@ -46,34 +46,6 @@
     }
   }
 
-  function parseStructuredText(text) {
-    const raw = String(text || "").replace(/^\uFEFF/, "");
-    const stripped = raw.replace(/^\s*\)\]\}',?\s*/, "").trim();
-    const candidates = [stripped];
-    if (stripped !== raw.trim()) candidates.push(raw.trim());
-    const lines = stripped.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    for (const line of lines) {
-      candidates.push(line);
-      candidates.push(line.replace(/^\d+\s*/, ""));
-    }
-    const firstArray = stripped.indexOf("[");
-    const lastArray = stripped.lastIndexOf("]");
-    if (firstArray >= 0 && lastArray > firstArray) candidates.push(stripped.slice(firstArray, lastArray + 1));
-
-    const seen = new Set();
-    const parsed = [];
-    for (const candidate of candidates) {
-      if (!candidate || seen.has(candidate)) continue;
-      seen.add(candidate);
-      try {
-        parsed.push(JSON.parse(candidate));
-      } catch (_) {
-        // Try the next known batch framing variant without retaining text.
-      }
-    }
-    return parsed;
-  }
-
   function inspectResponse(payload, responsePath, urlHint) {
     const queue = [{ value: payload, depth: 0, path: "$" }];
     const seen = new Set();
@@ -96,16 +68,6 @@
       seen.add(value);
       nodesVisited += 1;
       maxDepth = Math.max(maxDepth, current.depth);
-      if (Array.isArray(value)) {
-        value.slice(0, 80).forEach((item, index) => {
-          if (item && typeof item === "object") {
-            queue.push({ value: item, depth: current.depth + 1, path: `${current.path}[${index}]` });
-          } else {
-            addParsedString(queue, item, current.depth, `${current.path}[${index}]`);
-          }
-        });
-        continue;
-      }
       const keys = objectKeys(value);
       for (const key of keys) {
         const normalized = normalizedKey(key);
@@ -159,7 +121,6 @@
 
   root.CCEGeminiAdapter = Object.freeze({
     id: "gemini",
-    parseStructuredText,
     inspectResponse,
     schemaVerified: false,
     exportSupported: false
