@@ -58,6 +58,8 @@
       `Conversation id: ${d.conversationId || "—"}`,
       d.platform === "gemini" ? `Gemini conversation id hint: ${d.geminiLastConversationId || "—"}` : "",
       d.platform === "gemini" ? `Gemini field hints: ${Array.isArray(d.geminiLastFieldHints) && d.geminiLastFieldHints.length ? d.geminiLastFieldHints.join(", ") : "—"}` : "",
+      d.platform === "gemini" ? `Gemini last RPC: ${d.geminiLastRpcId || "—"}` : "",
+      d.platform === "gemini" ? `Gemini RPC shapes: ${Array.isArray(d.geminiRpcSummaries) && d.geminiRpcSummaries.length ? d.geminiRpcSummaries.map((item) => `${item.rpcId}(p${item.payloads},c${item.candidates},t${item.turns},u${item.users},a${item.assistants})`).join("; ") : "—"}` : "",
       `Schema: ${d.lastParsedSchemaVariant || (d.lastSchema && d.lastSchema.schemaType) || "—"}`,
       `Parsed: mapping ${d.lastParsedStats ? d.lastParsedStats.mappingNodes : 0} / active path ${d.lastParsedStats ? d.lastParsedStats.activePathNodes : 0} / excluded branch ${d.lastParsedStats ? d.lastParsedStats.excludedBranchNodes : 0} / messages ${d.lastParsedStats ? d.lastParsedStats.visibleMessages : 0}`,
       `Page info: ${d.lastPageInfo && Array.isArray(d.lastPageInfo.keys) && d.lastPageInfo.keys.length ? d.lastPageInfo.keys.join(", ") : "—"} · has_previous_page=${d.lastPageInfo && d.lastPageInfo.hasPreviousPage !== null ? d.lastPageInfo.hasPreviousPage : "—"} · has_next_page=${d.lastPageInfo && d.lastPageInfo.hasNextPage !== null ? d.lastPageInfo.hasNextPage : "—"} · has_more=${d.lastPageInfo && d.lastPageInfo.hasMore !== null ? d.lastPageInfo.hasMore : "—"} · end_cursor=${d.lastPageInfo && d.lastPageInfo.endCursorPresent ? "YES" : "NO"}`,

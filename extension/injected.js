@@ -64,6 +64,8 @@
     geminiSchemaVerified: false,
     geminiLastFieldHints: [],
     geminiLastConversationId: null,
+    geminiLastRpcId: null,
+    geminiRpcSummaries: [],
     batchResponses: 0,
     batchFrames: 0,
     batchInnerPayloads: 0,
@@ -281,7 +283,7 @@
     diagnostics.cacheSize = cache.size;
   }
 
-  function observePayload(payload, transport, contentType, responsePath) {
+  function observePayload(payload, transport, contentType, responsePath, rpcId) {
     diagnostics.jsonCandidates += 1;
     diagnostics.lastDetectedKeys = safeKeys(payload);
     diagnostics.lastContentType = String(contentType || "");
@@ -301,10 +303,35 @@
       diagnostics.geminiSchemaVerified = Boolean(report.schemaVerified);
       diagnostics.geminiLastFieldHints = Array.isArray(report.fieldHints) ? report.fieldHints.slice(0, 40) : [];
       diagnostics.geminiLastConversationId = report.conversationId || currentPageConversationId() || null;
+      diagnostics.geminiLastRpcId = rpcId || null;
+      if (rpcId) {
+        const previous = diagnostics.geminiRpcSummaries.find((item) => item.rpcId === rpcId) || {
+          rpcId,
+          payloads: 0,
+          candidates: 0,
+          turns: 0,
+          users: 0,
+          assistants: 0,
+          topLevelKeys: [],
+          fieldHints: []
+        };
+        previous.payloads += 1;
+        previous.candidates += report.possibleCandidate ? 1 : 0;
+        previous.turns += report.possibleTurnCount || 0;
+        previous.users += report.possibleUserMessages || 0;
+        previous.assistants += report.possibleAssistantMessages || 0;
+        previous.topLevelKeys = Array.isArray(report.topLevelKeys) ? report.topLevelKeys.slice(0, 20) : [];
+        previous.fieldHints = Array.isArray(report.fieldHints) ? report.fieldHints.slice(0, 20) : [];
+        diagnostics.geminiRpcSummaries = diagnostics.geminiRpcSummaries
+          .filter((item) => item.rpcId !== rpcId)
+          .concat(previous)
+          .slice(-30);
+      }
       if (report.possibleCandidate) diagnostics.geminiConversationCandidates += 1;
       window.postMessage({ source: SOURCE, type: "gemini-structure", report: {
         ...report,
         platform,
+        rpcId: rpcId || null,
         transport: String(transport || "unknown")
       } }, "*");
       publishStatus();
@@ -354,8 +381,11 @@
     const report = geminiAdapter && typeof geminiAdapter.parseStructuredTextReport === "function"
       ? geminiAdapter.parseStructuredTextReport(text)
       : { payloads: [], frameCount: 0, innerPayloads: 0, parseFailures: 1, rpcIds: [] };
-    const payloads = Array.isArray(report.payloads) ? report.payloads : [];
-    payloads.forEach((payload) => observePayload(payload, transport, contentType, responsePath));
+    const payloadRecords = Array.isArray(report.payloadRecords)
+      ? report.payloadRecords
+      : (Array.isArray(report.payloads) ? report.payloads.map((payload) => ({ payload, rpcId: "" })) : []);
+    const payloads = payloadRecords.map((record) => record.payload);
+    payloadRecords.forEach((record) => observePayload(record.payload, transport, contentType, responsePath, record.rpcId));
     const parsed = payloads.length;
     if (isGeminiBatchPath(responsePath)) {
       diagnostics.batchResponses += 1;
@@ -454,7 +484,7 @@
             if (typeof this.responseText === "string" && this.responseText) {
               observeStructuredText(this.responseText, "xhr-batch", contentType, responsePath);
             } else if (this.response && typeof this.response === "object") {
-              observePayload(this.response, "xhr-batch", contentType, responsePath);
+              observePayload(this.response, "xhr-batch", contentType, responsePath, "");
               diagnostics.batchResponses += 1;
               diagnostics.batchFrames += 1;
               publishStatus();

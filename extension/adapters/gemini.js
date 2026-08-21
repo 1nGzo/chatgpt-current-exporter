@@ -105,7 +105,7 @@
     const raw = String(text || "").replace(/^\uFEFF/, "");
     const stripped = raw.replace(/^\s*\)\]\}',?\s*/, "").trim();
     const lines = stripped.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const payloads = [];
+    const payloadRecords = [];
     const rpcIds = new Set();
     let frameCount = 0;
     let innerPayloads = 0;
@@ -131,7 +131,7 @@
         ? segment.filter((entry) => Array.isArray(entry) && entry[0] === "wrb.fr")
         : [];
       if (!entries.length) {
-        payloads.push(segment);
+        payloadRecords.push({ payload: segment, rpcId: "" });
         continue;
       }
       recognizedEnvelope = true;
@@ -141,19 +141,20 @@
         const nested = entry[2];
         if (typeof nested === "string") {
           try {
-            payloads.push(JSON.parse(nested));
+            payloadRecords.push({ payload: JSON.parse(nested), rpcId });
             innerPayloads += 1;
           } catch (_) {
             parseFailures += 1;
           }
         } else if (nested && typeof nested === "object") {
-          payloads.push(nested);
+          payloadRecords.push({ payload: nested, rpcId });
           innerPayloads += 1;
         }
       }
     }
     return {
-      payloads,
+      payloadRecords,
+      payloads: payloadRecords.map((record) => record.payload),
       frameCount,
       innerPayloads,
       parseFailures,
@@ -168,6 +169,7 @@
     if (batch.lengthPrefixed || batch.recognizedEnvelope) return batch;
     const payloads = parseJsonCandidates(text);
     return {
+      payloadRecords: payloads.map((payload) => ({ payload, rpcId: "" })),
       payloads,
       frameCount: payloads.length,
       innerPayloads: 0,
