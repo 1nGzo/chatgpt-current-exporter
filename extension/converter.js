@@ -494,6 +494,10 @@
 
   function renderMarkdown(raw) {
     const document = inspect(raw);
+    return renderDocument(document);
+  }
+
+  function renderDocument(document) {
     const stats = document.stats;
     const lines = [
       `# ${document.title}`,
@@ -514,6 +518,66 @@
       lines.push("", message.body, "", "---", "");
     });
     return { markdown: lines.join("\n"), document };
+  }
+
+  // Shared normalized contract: role/text/timestamp/platformMessageId.
+  function renderNormalized(conversation) {
+    const messages = conversation.messages.map((m, index) => ({ role: m.role, body: m.text,
+      messageId: m.platformMessageId || `dom-${index}`, messageIdSource: "message.id",
+      activePathIndex: index, createTime: m.timestamp }));
+    const result = renderDocument({ title: conversation.title, conversationId: conversation.conversationId, messages,
+      stats: { mappingNodes: messages.length, activePathNodes: messages.length, excludedBranchNodes: 0 } });
+    if (conversation.metadata?.warning) result.markdown = `> ${conversation.metadata.warning}\n\n${result.markdown}`;
+    return result;
+  }
+
+  // DOM-to-Markdown extraction is shared; final document rendering stays above.
+  function domMarkdown(element) {
+    function walk(node) {
+      if (node.nodeType === 3) return node.textContent;
+      if (node.nodeType !== 1) return "";
+      const tag = node.tagName.toLowerCase();
+      if (["button", "script", "style", "svg", "nav"].includes(tag) || node.matches('[role="toolbar"], [role="button"], [hidden], [aria-hidden="true"]')) return "";
+      const body = () => Array.from(node.childNodes, walk).join("");
+      const href = value => { try { const u = new URL(value, node.baseURI); return ["http:", "https:"].includes(u.protocol) ? u.href.replace(/\)/g, "%29") : ""; } catch (_) { return ""; } };
+      if (tag === "pre") {
+        const code = node.querySelector("code") || node;
+        const text = code.textContent;
+        const language = (code.className || "").match(/(?:language|lang)-([\w+-]+)/)?.[1] || "";
+        const fence = "`".repeat(Math.max(3, ...Array.from(text.matchAll(/`+/g), m => m[0].length + 1)));
+        return `\n\n${fence}${language}\n${text}\n${fence}\n\n`;
+      }
+      if (tag === "code") { const fence = "`".repeat(Math.max(1, ...Array.from(node.textContent.matchAll(/`+/g), m => m[0].length + 1))); return `${fence} ${body()} ${fence}`; }
+      if (tag === "br") return "\n";
+      if (/^h[1-6]$/.test(tag)) return `\n\n${"#".repeat(Number(tag[1]))} ${body().trim()}\n\n`;
+      if (tag === "a") return href(node.getAttribute("href")) ? `[${body()}](${href(node.getAttribute("href"))})` : body();
+      if (tag === "img") return href(node.getAttribute("src")) ? `![${node.getAttribute("alt") || "image"}](${href(node.getAttribute("src"))})` : "";
+      if (tag === "strong" || tag === "b") return `**${body()}**`;
+      if (tag === "em" || tag === "i") return `*${body()}*`;
+      if (tag === "blockquote") return "\n\n" + body().trim().split("\n").map(line => "> " + line).join("\n") + "\n\n";
+      if (tag === "li") return `\n${node.parentElement.tagName === "OL" ? `${Array.from(node.parentElement.children).indexOf(node) + 1}.` : "-"} ${body().trim().replace(/\n/g, "\n  ")}`;
+      if (tag === "table") {
+        const rows = Array.from(node.querySelectorAll("tr"), row => Array.from(row.children, cell => walk(cell).trim().replace(/\|/g, "\\|").replace(/\n/g, "<br>")).join(" | "));
+        if (!rows.length) return "";
+        rows.splice(1, 0, Array.from(node.querySelector("tr").children, () => "---").join(" | "));
+        return "\n\n" + rows.map(row => `| ${row} |`).join("\n") + "\n\n";
+      }
+      return ["p", "div", "section", "ul", "ol"].includes(tag) ? `\n\n${body()}\n\n` : body();
+    }
+    return walk(element).trim();
+  }
+
+  function downloadText(filename, content, mimeType) {
+    const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.style.display = "none";
+    (document.body || document.documentElement).appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   const FORBIDDEN = /[\x00-\x1f\x7f\/\\<>:"|?*]/g;
@@ -537,5 +601,5 @@
     return sanitizeTitle(rawTitle, sanitizeTitle(id, "conversation"));
   }
 
-  root.CCEConversationConverter = { inspect, renderMarkdown, filenameStem, mergeMessagePages, warningSummary, setNamingRules };
+  root.CCEConversationConverter = { inspect, renderMarkdown, renderNormalized, domMarkdown, downloadText, filenameStem, mergeMessagePages, warningSummary, setNamingRules };
 })(globalThis);

@@ -1,0 +1,38 @@
+<!doctype html><meta charset="utf-8"><title>Fixture title</title>
+<div data-message-author-role="user" data-message-id="u"><p>Question</p><button>Edit</button></div>
+<div data-message-author-role="assistant" data-message-id="a"><div data-message-author-role="assistant"><h2>Answer</h2><p>Hello <a href="https://example.com/">link</a></p><blockquote>Quote</blockquote><ul><li>Item</li></ul><pre><code class="language-js">const x = 1;</code></pre><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table><img src="https://example.com/image.png" alt="asset"><div role="toolbar"><button>Copy</button>Regenerate</div></div></div>
+<div data-message-author-role="assistant" data-message-id="a">Duplicate</div>
+<div data-message-author-role="system">Secret</div>
+<script src="../converter.js"></script><script src="../adapters/grok.js"></script>
+<script>
+(async () => {
+ const assert = (value, message) => { if (!value) throw Error(message); };
+ const api = CCEGrokAdapter, url = 'https://grok.com/c/fixture';
+ const nodes = {responseNodes: [{responseId:'u'}, {responseId:'a'}, {responseId:'s'}]};
+ const payload = {responses:[{responseId:'a',sender:'grok',message:'# Answer\n\n```js\nx\n```'},{responseId:'s',sender:'system',message:'Secret'},{responseId:'u',sender:'human',message:'Question'}]};
+ const detail = {conversation:{conversationId:'fixture',title:'API title'}};
+ try {
+  for (const host of ['grok.com','www.grok.com']) for (const path of ['c','chat','conversation']) assert(api.conversationId(`https://${host}/${path}/fixture`) === 'fixture', 'URL');
+  const normalized = api.parseApi(detail,nodes,payload,url,document.title);
+  assert(normalized.messages.map(m=>m.role).join() === 'user,assistant', 'API order/filter');
+  assert(normalized.title === 'API title', 'API title');
+  const dom = api.parseDom(document,url);
+  assert(dom.messages.length === 2, 'DOM dedup');
+  const markdown = CCEConversationConverter.renderNormalized(dom).markdown;
+  for (const expected of ['## Answer','```js','[link](https://example.com/)','> Quote','- Item','| A | B |','![asset]']) assert(markdown.includes(expected),expected);
+  for (const excluded of ['Regenerate','Duplicate','Secret','Edit']) assert(!markdown.includes(excluded),excluded);
+  let calls = [];
+  const captured = await api.capture({url,document,fetch: async (path,options) => {calls.push([path,options]);return {ok:true,json:async()=>[detail,nodes,payload][calls.length-1]};}});
+  assert(captured.metadata.source==='api' && calls.length===3,'API-first');
+  assert(JSON.parse(calls[2][1].body).responseIds.join()==='u,a,s','POST body');
+  const fallback = await api.capture({url,document,fetch:async()=>({ok:false,status:403})});
+  assert(fallback.metadata.source==='dom' && fallback.messages.length===2,'HTTP fallback');
+  const missing = {responses:payload.responses.filter(r=>r.responseId!=='a')};
+  let i=0;
+  assert((await api.capture({url,document,fetch:async()=>({ok:true,json:async()=>[detail,nodes,missing][i++]})})).metadata.source==='dom','Missing body fallback');
+  assert((await api.capture({url:'https://grok.com/',document,fetch:async()=>{throw Error('should not fetch')}})).metadata.source==='dom','No ID fallback');
+  let rejected=false;try {await api.capture({url,document,currentUrl:()=>url+'2',fetch:async()=>({ok:false})});}catch(_){rejected=true;}assert(rejected,'SPA guard');
+  document.body.textContent='PASS: Grok API order, roles, title, DOM formatting/dedup, fallback, SPA guard';
+ } catch(error) {document.body.textContent='FAIL: '+error.stack;}
+})();
+</script>

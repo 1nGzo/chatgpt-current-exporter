@@ -79,6 +79,7 @@
   function show(snapshot) {
     state.style.color = snapshot.state === "Ready" ? "#146c43" : snapshot.state === "Error" ? "#a33" : "#865b00";
     state.textContent = snapshot.state === "Ready" ? "Ready（完整性仍需实际验证）" : snapshot.state === "Review" ? "Review（有未识别字段，请检查诊断）" : snapshot.state;
+    document.querySelector("h1").textContent = `${snapshot.platformLabel || "ChatGPT"} Current Conversation Exporter`;
     id.textContent = snapshot.conversationId || "—";
     title.textContent = snapshot.title || "—";
     captured.textContent = snapshot.capturedAt || "—";
@@ -91,7 +92,7 @@
   function refreshStatus() {
     if (tabId === null) return;
     chrome.tabs.sendMessage(tabId, { type: "GET_STATUS" }, (snapshot) => {
-      if (chrome.runtime.lastError || !snapshot) return showError("请在 ChatGPT 会话页刷新后重试");
+      if (chrome.runtime.lastError || !snapshot) return showError("请在支持的平台会话页刷新后重试");
       show(snapshot);
     });
   }
@@ -101,7 +102,7 @@
     if (!tab || tab.id === undefined) return showError("没有找到当前标签页", tab && tab.url ? safeUrl(tab.url) : null);
     tabId = tab.id;
     chrome.tabs.sendMessage(tabId, { type: "GET_STATUS" }, (snapshot) => {
-      if (chrome.runtime.lastError || !snapshot) return showError("请在 ChatGPT 会话页刷新后重试", tab.url ? safeUrl(tab.url) : null);
+      if (chrome.runtime.lastError || !snapshot) return showError("请在支持的平台会话页刷新后重试", tab.url ? safeUrl(tab.url) : null);
       show(snapshot);
     });
   });
@@ -110,7 +111,7 @@
     if (tabId === null) return;
     state.textContent = "正在重新扫描当前页面…";
     chrome.tabs.sendMessage(tabId, { type: "RESCAN_CURRENT" }, (snapshot) => {
-      if (chrome.runtime.lastError || !snapshot) return showError("重新扫描失败，请刷新 ChatGPT 会话页");
+      if (chrome.runtime.lastError || !snapshot) return showError("重新扫描失败，请刷新支持的平台会话页");
       show(snapshot);
       window.setTimeout(refreshStatus, 800);
     });
@@ -122,7 +123,7 @@
     chrome.tabs.sendMessage(tabId, { type: "EXPORT_CURRENT" }, (result) => {
       if (chrome.runtime.lastError || !result || !result.ok) return showError((result && result.error) || "导出失败，请查看会话页状态");
       state.style.color = "#146c43";
-      state.textContent = `已开始下载：${result.files.join("、")}`;
+      state.textContent = `已开始下载：${result.files.join("、")}${result.warning ? `（${result.warning}）` : ""}`;
     });
   });
 })();

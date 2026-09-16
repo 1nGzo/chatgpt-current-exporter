@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Current Conversation Exporter",
+  "name": "Current Conversation Exporter",
   "version": "0.1.0",
-  "description": "Capture the current ChatGPT conversation response locally and export raw JSON plus active-path Markdown.",
+  "description": "Capture the current ChatGPT or Grok conversation response locally and export raw JSON plus active-path Markdown.",
   "action": {
     "default_title": "导出当前会话",
     "default_popup": "popup.html"
@@ -28,6 +28,20 @@
         "content.js"
       ],
       "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://grok.com/*",
+        "https://www.grok.com/*"
+      ],
+      "js": [
+        "converter.js",
+        "adapters/grok.js",
+        "grok-content.js"
+      ],
+      "run_at": "document_idle",
       "world": "ISOLATED",
       "all_frames": false
     }
