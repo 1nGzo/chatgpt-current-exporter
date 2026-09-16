@@ -130,7 +130,6 @@ python3 -m json.tool extension/manifest.json >/dev/null
 
 ## 已知限制
 
-- 本轮没有在真实登录的 ChatGPT 页面上做 live capture；因此“按钮出现”和“纯终端 parser 测试通过”不等于已经证明当前网站能返回完整单会话数据。
 - 页面监听器只能捕获它安装之后页面自己发出的 JSON response；刷新通常是最可靠的重新捕获方式。
 - 如果当前版本使用 streaming/SSE、明确存在下一页的分页 response、非 JSON transport，当前版本不会偷偷改成 DOM 抓取；它会保持 Waiting/Error 并提示需要诊断。`page_info.end_cursor` 单独存在不等于仍有下一页，需结合 `has_next_page`/`has_more` 或明确的 next cursor 判断。
 - 扩展端和 Python 端各有一个小型 renderer，这是为了让一次点击可以同时下载两个本地文件；两者共享同一 active-path/schema 规则，但暂时没有真实页面的 parity fixture。Python 端是历史 raw JSON 的权威重建入口。
