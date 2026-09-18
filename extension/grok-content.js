@@ -32,9 +32,8 @@
       if (location.href !== value.sourceUrl) throw Error("会话已切换，请重新导出");
       const stem = converter.filenameStem(value.title, value.conversationId || "grok-conversation");
       const rendered = converter.renderNormalized(value);
-      converter.downloadText(`${stem}.raw.json`, JSON.stringify(value, null, 2) + "\n", "application/json");
-      setTimeout(() => converter.downloadText(`${stem}.md`, rendered.markdown, "text/markdown"), 300);
-      return { ok: true, files: [`${stem}.raw.json`, `${stem}.md`], warning: value.metadata.warning };
+      const files = await converter.downloadExport(stem, JSON.stringify(value, null, 2) + "\n", rendered.markdown);
+      return { ok: true, files, warning: value.metadata.warning };
     })().then(respond).catch(error => respond(message.type === "EXPORT_CURRENT" ? { ok: false, error: error.message } : {
       extension: true, platform: "grok", platformLabel: "Grok", state: "Error", captured: false,
       conversationId: adapter.conversationId(location.href), incompleteReasons: [error.message],

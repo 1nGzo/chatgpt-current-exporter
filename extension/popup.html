@@ -16,6 +16,14 @@
         <dt>Captured</dt><dd id="captured">—</dd>
         <dt>Stats</dt><dd id="stats">—</dd>
       </dl>
+      <fieldset id="export-format" disabled>
+        <legend>导出格式</legend>
+        <div class="format-options">
+          <label><input type="radio" name="exportFormat" value="markdown" checked><span>Markdown</span></label>
+          <label><input type="radio" name="exportFormat" value="json"><span>JSON</span></label>
+          <label><input type="radio" name="exportFormat" value="both"><span>两者</span></label>
+        </div>
+      </fieldset>
       <button id="export" type="button">导出当前会话</button>
       <button id="rescan" type="button" class="secondary">重新扫描当前页面</button>
       <pre id="diagnostics">—</pre>

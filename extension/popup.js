@@ -10,6 +10,26 @@
   const button = document.getElementById("export");
   const rescan = document.getElementById("rescan");
   let tabId = null;
+  const formatControl = document.getElementById("export-format");
+  const formatInputs = formatControl.querySelectorAll("input");
+  let formatError = null;
+  let formatSaved = chrome.storage.local.get({ exportFormat: "markdown" }).then(({ exportFormat }) => {
+    const selected = ["markdown", "json", "both"].includes(exportFormat) ? exportFormat : "markdown";
+    for (const input of formatInputs) input.checked = input.value === selected;
+    formatControl.disabled = false;
+  }).catch(() => {
+    formatError = "无法读取导出格式，请重新打开扩展";
+    state.textContent = formatError;
+  });
+  formatControl.addEventListener("change", (event) => {
+    formatControl.disabled = true;
+    formatSaved = chrome.storage.local.set({ exportFormat: event.target.value }).then(() => {
+      formatError = null;
+    }).catch(() => {
+      formatError = "无法保存导出格式，请重新选择后重试";
+      state.textContent = formatError;
+    }).finally(() => { formatControl.disabled = false; });
+  });
 
   function safeUrl(value) {
     try {
@@ -129,8 +149,10 @@
     });
   });
 
-  button.addEventListener("click", () => {
+  button.addEventListener("click", async () => {
     if (tabId === null) return;
+    await formatSaved;
+    if (formatError) { state.textContent = formatError; return; }
     state.textContent = "正在准备本地文件…";
     chrome.tabs.sendMessage(tabId, { type: "EXPORT_CURRENT" }, (result) => {
       if (chrome.runtime.lastError || !result || !result.ok) return showError((result && result.error) || "导出失败，请查看会话页状态");

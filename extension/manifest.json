@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "permissions": ["storage"],
   "name": "Current Conversation Exporter",
   "version": "0.1.0",
   "description": "Capture the current ChatGPT or Grok conversation response locally and export raw JSON plus active-path Markdown.",

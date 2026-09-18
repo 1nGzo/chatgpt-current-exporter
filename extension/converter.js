@@ -580,6 +580,24 @@
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
+  async function downloadExport(stem, rawText, markdown) {
+    const { exportFormat } = await chrome.storage.local.get({ exportFormat: "markdown" });
+    const files = [];
+    if (exportFormat === "json" || exportFormat === "both") {
+      downloadText(`${stem}.raw.json`, rawText, "application/json");
+      files.push(`${stem}.raw.json`);
+    }
+    if (exportFormat !== "json") {
+      if (exportFormat === "both") {
+        window.setTimeout(() => downloadText(`${stem}.md`, markdown, "text/markdown"), 300);
+      } else {
+        downloadText(`${stem}.md`, markdown, "text/markdown");
+      }
+      files.push(`${stem}.md`);
+    }
+    return files;
+  }
+
   const FORBIDDEN = /[\x00-\x1f\x7f\/\\<>:"|?*]/g;
   function sanitizeTitle(rawTitle, fallback) {
     let valueToUse = typeof rawTitle === "string" ? rawTitle : "";
@@ -601,5 +619,5 @@
     return sanitizeTitle(rawTitle, sanitizeTitle(id, "conversation"));
   }
 
-  root.CCEConversationConverter = { inspect, renderMarkdown, renderNormalized, domMarkdown, downloadText, filenameStem, mergeMessagePages, warningSummary, setNamingRules };
+  root.CCEConversationConverter = { inspect, renderMarkdown, renderNormalized, domMarkdown, downloadText, downloadExport, filenameStem, mergeMessagePages, warningSummary, setNamingRules };
 })(globalThis);

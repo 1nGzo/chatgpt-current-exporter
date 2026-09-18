@@ -278,11 +278,10 @@
       const stem = converter.filenameStem(entry.document.title, entry.document.conversationId || currentId);
       // No artificial length limit: stringify and Blob retain the full payload.
       const rawText = entry.rawText || `${JSON.stringify(entry.payload, null, 2)}\n`;
-      downloadText(`${stem}.raw.json`, rawText, "application/json");
-      window.setTimeout(() => downloadText(`${stem}.md`, rendered.markdown, "text/markdown"), 300);
+      const files = await converter.downloadExport(stem, rawText, rendered.markdown);
       lastError = "";
       updatePanel();
-      return { ok: true, files: [`${stem}.raw.json`, `${stem}.md`] };
+      return { ok: true, files };
     } catch (error) {
       lastError = `导出失败：${error && error.message ? error.message : String(error)}`;
       updatePanel();
