@@ -22,6 +22,18 @@
 
   function formatDiagnostics(snapshot) {
     const d = snapshot && snapshot.diagnostics ? snapshot.diagnostics : {};
+    if (snapshot && snapshot.platform === "grok") return [
+      `Extension: ${snapshot.extension ? "YES" : "NO"}`,
+      `Injected: ${d.injected ? "YES" : "NO"} (Grok isolated content script)`,
+      `Current URL: ${d.currentUrl || "—"}`,
+      `Conversation ID: ${d.conversationId || snapshot.conversationId || "—"}`,
+      ...(d.apiRequests || []).map(r => `${r.method} ${r.path}\n  HTTP ${r.status ?? "unavailable"} · credentials=${r.credentials} · ${r.contentType || "unknown content-type"}\n  keys: ${(r.keys || []).join(", ") || "—"}${r.error ? ` · ${r.error}` : ""}`),
+      ...(d.domCandidates || []).map(r => `DOM ${r.selector}: ${r.count}`),
+      `Iframes: ${d.iframeCount ?? "not inspected"}`,
+      `Fallback reason: ${d.fallbackReason || "none"}`,
+      `Completeness: ${d.completeness || "UNAVAILABLE"}`,
+      `Ready reason: ${d.readyReason || "—"}`
+    ].join("\n");
     return [
       `Extension: ${snapshot && snapshot.extension ? "YES" : "NO"}`,
       `Injected: ${d.injected ? "YES" : "NO"}`,

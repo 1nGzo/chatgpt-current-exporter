@@ -27,12 +27,41 @@
   assert(JSON.parse(calls[2][1].body).responseIds.join()==='u,a,s','POST body');
   const fallback = await api.capture({url,document,fetch:async()=>({ok:false,status:403})});
   assert(fallback.metadata.source==='dom' && fallback.messages.length===2,'HTTP fallback');
+  assert(fallback.metadata.diagnostics.apiRequests.length===2,'Metadata failure still tries response-node');
+  assert(fallback.metadata.diagnostics.apiRequests.every(r=>r.status===403),'HTTP diagnostics');
+  let metadataCalls=0;
+  const withoutMetadata=await api.capture({url,document,fetch:async(_path,options)=>{
+    assert(options.credentials==='include','Authenticated same-origin request');
+    metadataCalls++;
+    return metadataCalls===1 ? {ok:false,status:404,json:async()=>({message:'PRIVATE error body'})}
+      : {ok:true,status:200,headers:{get:()=> 'application/json'},json:async()=>metadataCalls===2?nodes:payload};
+  }});
+  assert(withoutMetadata.metadata.source==='api' && withoutMetadata.messages.length===2,'Metadata optional; no DOM/API mixing');
+  assert(!JSON.stringify(withoutMetadata.metadata.diagnostics).includes('PRIVATE'),'Diagnostics exclude error body');
+  const modern=document.implementation.createHTMLDocument('Current Grok fixture');
+  modern.body.innerHTML='<div data-scroll-anchor-root id="u"><div role="article" data-testid="user-message"><p>Modern question</p><button>Edit</button></div></div><div data-scroll-anchor-root id="a"><div role="article" data-testid="assistant-message"><p>Modern answer</p><div role="toolbar">Copy</div></div></div><div data-testid="user-message" data-origin="system"><p>System internal</p></div><div hidden><div data-testid="assistant-message">Hidden</div></div>';
+  const modernFallback=await api.capture({url,document:modern,fetch:async()=>({ok:false,status:401,headers:{get:()=> 'application/json'},json:async()=>({code:16,message:'PRIVATE'})})});
+  assert(modernFallback.messages.map(m=>m.role).join()==='user,assistant','Current testid roles');
+  assert(modernFallback.messages.map(m=>m.platformMessageId).join()==='u,a','Current row IDs');
+  assert(modernFallback.messages.map(m=>m.text).join()==='Modern question,Modern answer','Current text excludes controls/system/hidden');
+  assert(modernFallback.metadata.diagnostics.domCandidates[0].count===2,'DOM selector counts');
+  const empty=document.implementation.createHTMLDocument('Empty');
+  let diagnosticError;
+  try { await api.capture({url,document:empty,fetch:async()=>({ok:false,status:403,headers:{get:()=> 'text/html'},json:async()=>{throw Error('PRIVATE html')}})}); } catch(error) {diagnosticError=error;}
+  assert(diagnosticError.diagnostics.apiRequests[0].contentType==='text/html','Failed capture retains content type');
+  assert(diagnosticError.diagnostics.fallbackReason.includes('response-node') && diagnosticError.diagnostics.fallbackReason.includes('403'),'Failed capture retains failing endpoint');
+  assert(!JSON.stringify(diagnosticError.diagnostics).includes('PRIVATE'),'No response text in diagnostics');
+  const longNodes={responseNodes:Array.from({length:120},(_,i)=>({responseId:String(i)}))};
+  const longPayload={responses:longNodes.responseNodes.map((n,i)=>({...n,sender:i%2?'grok':'human',message:'Message '+i}))};
+  let longCalls=0;
+  const long=await api.capture({url,document:modern,fetch:async()=>({ok:true,status:200,json:async()=>[detail,longNodes,longPayload][longCalls++]})});
+  assert(long.metadata.source==='api' && long.messages.length===120,'Long API transcript preferred over partial DOM');
   const missing = {responses:payload.responses.filter(r=>r.responseId!=='a')};
   let i=0;
   assert((await api.capture({url,document,fetch:async()=>({ok:true,json:async()=>[detail,nodes,missing][i++]})})).metadata.source==='dom','Missing body fallback');
   assert((await api.capture({url:'https://grok.com/',document,fetch:async()=>{throw Error('should not fetch')}})).metadata.source==='dom','No ID fallback');
   let rejected=false;try {await api.capture({url,document,currentUrl:()=>url+'2',fetch:async()=>({ok:false})});}catch(_){rejected=true;}assert(rejected,'SPA guard');
-  document.body.textContent='PASS: Grok API order, roles, title, DOM formatting/dedup, fallback, SPA guard';
+  document.body.textContent='PASS: Grok API order, roles, title, DOM formatting/dedup, current testid selectors, metadata failure, safe diagnostics, long API transcript, fallback, SPA guard';
  } catch(error) {document.body.textContent='FAIL: '+error.stack;}
 })();
 </script>

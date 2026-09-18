@@ -5,8 +5,14 @@
   const namingReady = fetch(chrome.runtime.getURL("naming.local.json"), { cache: "no-store" })
     .then(r => r.ok ? r.json() : null).then(c => { if (c?.series_rules) converter.setNamingRules(c.series_rules); }).catch(() => {});
   let pending = null;
+  let pendingUrl = null;
   function capture() {
-    if (!pending) pending = adapter.capture({ url: location.href, document, fetch, currentUrl: () => location.href }).finally(() => { pending = null; });
+    if (!pending || pendingUrl !== location.href) {
+      pendingUrl = location.href;
+      const operation = adapter.capture({ url: pendingUrl, document, fetch, currentUrl: () => location.href })
+        .finally(() => { if (pending === operation) { pending = null; pendingUrl = null; } });
+      pending = operation;
+    }
     return pending;
   }
   function snapshot(value) {
@@ -14,7 +20,7 @@
       captured: true, conversationId: value.conversationId, title: value.title, capturedAt: value.capturedAt,
       mappingNodes: value.messages.length, activePathNodes: value.messages.length, activePathMessages: value.messages.length,
       rawJsonSize: JSON.stringify(value).length, incompleteReasons: [], warningSummary: value.metadata.warning,
-      diagnostics: { platform: "grok", platformLabel: "Grok", currentUrl: value.sourceUrl,
+      diagnostics: { ...value.metadata.diagnostics, platform: "grok", platformLabel: "Grok",
         readyReason: value.metadata.warning || "Grok API transcript", completeness: value.metadata.source === "api" ? "API" : "DOM_PARTIAL" } };
   }
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
@@ -31,7 +37,9 @@
       return { ok: true, files: [`${stem}.raw.json`, `${stem}.md`], warning: value.metadata.warning };
     })().then(respond).catch(error => respond(message.type === "EXPORT_CURRENT" ? { ok: false, error: error.message } : {
       extension: true, platform: "grok", platformLabel: "Grok", state: "Error", captured: false,
-      incompleteReasons: [error.message], diagnostics: { readyReason: error.message } }));
+      conversationId: adapter.conversationId(location.href), incompleteReasons: [error.message],
+      diagnostics: { injected: true, conversationId: adapter.conversationId(location.href),
+        ...error.diagnostics, readyReason: error.message } }));
     return true;
   });
 })();
