@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 import sys
 
-from .conversation import ConversationError, load_json, parse_conversation
+from .adapters import parse_with_adapter
+from .conversation import ConversationError, load_json
 from .markdown import render_markdown
+from .model import detect_platform
 from .naming import conflict_path
 
 
@@ -41,6 +42,7 @@ def _write_output(path: Path, content: str, *, force: bool, use_new: bool) -> tu
 def _print_summary(input_path: Path, output_path: Path | None, document, *, verbose: bool) -> None:
     stats = document.stats
     print(f"input: {input_path}")
+    print(f"platform: {detect_platform(document.raw_payload)}")
     print(f"title: {document.title}")
     print(f"conversation_id: {document.conversation_id or '(missing)'}")
     print(f"mapping nodes: {stats.mapping_nodes}")
@@ -74,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     input_path = args.input.expanduser().resolve()
     try:
-        document = parse_conversation(load_json(input_path))
+        document = parse_with_adapter(load_json(input_path))
         if document.stats.incomplete_reasons:
             _print_summary(input_path, None, document, verbose=True)
             print("ERROR: payload explicitly indicates pagination/truncation; Markdown was not generated.", file=sys.stderr)

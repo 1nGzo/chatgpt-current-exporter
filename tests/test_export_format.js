@@ -33,9 +33,8 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 (async () => {
   const chatSource = source('content.js');
   const start = chatSource.indexOf('  async function exportCurrent()');
-  const end = chatSource.indexOf('  function exportGeminiDebugBundle', start);
   // Export has no dependency on provider parsing: retain real download code and stub capture/render.
-  const exportFunction = end < 0 ? chatSource.slice(start, chatSource.indexOf('\n  function ', start + 10)) : chatSource.slice(start, end);
+  const exportFunction = chatSource.slice(start, chatSource.indexOf('\n  function ', start + 10));
   const payload = { fixture: true }, raw = JSON.stringify(payload, null, 2) + '\n', markdown = '# unchanged\n';
   const chat = vm.createContext({ namingConfigReady: Promise.resolve(), platformId: 'chatgpt', currentId: 'id',
     currentEntry: () => ({ payload, rawText: raw, document: { title: 'fixture', conversationId: 'id', messages: [{}], stats: { incompleteReasons: [] } } }),

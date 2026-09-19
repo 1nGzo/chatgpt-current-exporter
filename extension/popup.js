@@ -9,7 +9,6 @@
   const stats = document.getElementById("stats");
   const diagnostics = document.getElementById("diagnostics");
   const button = document.getElementById("export");
-  const debugBundle = document.getElementById("debug-bundle");
   const rescan = document.getElementById("rescan");
   let tabId = null;
   const formatControl = document.getElementById("export-format");
@@ -70,32 +69,10 @@
       `Batched responses: ${d.batchResponses || 0} · frames ${d.batchFrames || 0} · inner payloads ${d.batchInnerPayloads || 0}`,
       `JSON candidates: ${d.jsonCandidates || 0}`,
       `Conversation candidates: ${d.conversationCandidates || 0}`,
-      `Candidate responses: ${d.candidateResponses || d.geminiConversationCandidates || 0}`,
-      `Candidate user turns: ${d.candidateUserTurns || d.geminiLastUserMessages || 0}`,
-      `Candidate assistant turns: ${d.candidateAssistantTurns || d.geminiLastAssistantMessages || 0}`,
-      `Normalized user turns: ${d.normalizedUserTurns || 0}`,
-      `Normalized assistant turns: ${d.normalizedAssistantTurns || 0}`,
-      `Possible total turns: ${d.possibleTotalTurns || d.geminiLastTurnCount || 0}`,
-      `Schema variant: ${d.geminiSchemaVariant || "—"}`,
-      `Schema verified: ${d.geminiSchemaVerified ? "YES" : "NO"}`,
-      `Ordering validated: ${d.geminiOrderingValidated ? "YES" : "NO"}`,
-      `Gemini adapter: ${d.geminiAdapterLoaded ? "LOADED" : "MISSING"} · mode ${d.geminiAdapterMode || "—"}`,
-      d.geminiAdapterError ? `Gemini adapter error: ${d.geminiAdapterError}` : "",
       `Last content-type: ${d.lastContentType || "—"}`,
       `Last response path: ${d.lastResponsePath || "—"}`,
-      `Last candidate content-type: ${d.geminiLastCandidateContentType || "—"}`,
-      `Last candidate path: ${d.geminiLastCandidatePath || "—"}`,
       `Top-level shape: ${d.topLevelShape || "—"}`,
-      `Last detected keys: ${list(d.lastDetectedKeys || d.geminiLastTopLevelKeys)}`,
-      `Structural signature: ${d.structuralSignature || "—"}`,
-      `Pagination detected: ${d.paginationDetected || d.geminiPaginationDetected ? "YES" : "NO"}`,
-      `Truncation detected: ${d.truncationDetected || d.geminiTruncationDetected ? "YES" : "NO"}`,
-      `Branch selection: ${d.branchSelection || d.geminiBranchSelection || "—"}`,
-      `Completeness: ${d.completeness || d.geminiCompleteness || "WAITING"}`,
-      `Gemini responses cached: ${d.geminiResponseCount || 0}`,
-      `Batch RPC ids: ${Array.isArray(d.batchRpcIds) && d.batchRpcIds.length ? d.batchRpcIds.join(", ") : "—"}`,
-      `RPC shapes: ${Array.isArray(d.geminiRpcSummaries) && d.geminiRpcSummaries.length ? d.geminiRpcSummaries.map((item) => `${item.rpcId}(p${item.responses},c${item.candidates},u${item.users}/${item.maxUsers},a${item.assistants}/${item.maxAssistants})`).join("; ") : "—"}`,
-      `Last field hints: ${list(d.geminiLastFieldHints)}`,
+      `Last detected keys: ${list(d.lastDetectedKeys)}`,
       `Legacy candidate path: ${d.lastCandidatePath || "—"}`,
       `Conversation endpoint responses: ${d.currentConversationEndpointResponses || 0}`,
       `Endpoint keys: ${Array.isArray(d.lastEndpointKeys) && d.lastEndpointKeys.length ? d.lastEndpointKeys.join(", ") : "—"}`,
@@ -110,7 +87,7 @@
       `Message page keys: ${Array.isArray(d.lastMessagePageKeys) && d.lastMessagePageKeys.length ? d.lastMessagePageKeys.join(", ") : "—"}`,
       `Captured pages: ${snapshot && snapshot.pagesCaptured ? snapshot.pagesCaptured : 0} · pagination=${d.paginationState || (snapshot && snapshot.paginationState) || "—"}`,
       `Conversation id: ${d.conversationId || "—"}`,
-      `Schema: ${d.geminiSchemaVariant || d.lastParsedSchemaVariant || (d.lastSchema && d.lastSchema.schemaType) || "—"}`,
+      `Schema: ${d.lastParsedSchemaVariant || (d.lastSchema && d.lastSchema.schemaType) || "—"}`,
       `Parsed: mapping ${d.lastParsedStats ? d.lastParsedStats.mappingNodes : 0} / active path ${d.lastParsedStats ? d.lastParsedStats.activePathNodes : 0} / excluded branch ${d.lastParsedStats ? d.lastParsedStats.excludedBranchNodes : 0} / messages ${d.lastParsedStats ? d.lastParsedStats.visibleMessages : 0}`,
       `Page info: ${d.lastPageInfo && Array.isArray(d.lastPageInfo.keys) && d.lastPageInfo.keys.length ? d.lastPageInfo.keys.join(", ") : "—"} · has_previous_page=${d.lastPageInfo && d.lastPageInfo.hasPreviousPage !== null ? d.lastPageInfo.hasPreviousPage : "—"} · has_next_page=${d.lastPageInfo && d.lastPageInfo.hasNextPage !== null ? d.lastPageInfo.hasNextPage : "—"} · has_more=${d.lastPageInfo && d.lastPageInfo.hasMore !== null ? d.lastPageInfo.hasMore : "—"} · end_cursor=${d.lastPageInfo && d.lastPageInfo.endCursorPresent ? "YES" : "NO"}`,
       `mapping: ${d.mapping ? "YES" : "NO"}`,
@@ -134,7 +111,6 @@
     state.style.color = "";
     if (statusContainer && statusContainer.dataset) statusContainer.dataset.state = "error";
     button.disabled = true;
-    if (debugBundle) debugBundle.disabled = true;
     diagnostics.textContent = [
       "Extension: NO",
       `Current URL: ${url || "(unavailable)"}`,
@@ -149,18 +125,15 @@
     state.textContent = s === "Ready" ? "Ready（已捕获完整数据）" : s === "Review" ? "Review（需检查诊断）" : s;
     platform.textContent = snapshot.platformLabel || snapshot.platform || "—";
     const h1 = document.querySelector && document.querySelector("h1");
-    if (h1) h1.textContent = `${snapshot.platformLabel || "ChatGPT"} Current Conversation Exporter`;
+    if (h1) h1.textContent = "PromptDock";
     id.textContent = snapshot.conversationId || "—";
     title.textContent = snapshot.title || "—";
     captured.textContent = snapshot.capturedAt || "—";
     stats.textContent = snapshot.captured
       ? `mapping ${snapshot.mappingNodes} · active path ${snapshot.activePathNodes} · messages ${snapshot.activePathMessages} · raw ${snapshot.rawJsonSize} bytes`
-      : snapshot.platform === "gemini"
-        ? `responses ${snapshot.diagnostics.geminiResponseCount || 0} · possible turns ${snapshot.diagnostics.possibleTotalTurns || 0} · completeness ${snapshot.diagnostics.completeness || "WAITING"}`
-        : "—";
+      : "—";
     diagnostics.textContent = formatDiagnostics(snapshot);
     button.disabled = !snapshot.captured || snapshot.incompleteReasons.length > 0 || snapshot.activePathMessages === 0;
-    if (debugBundle) debugBundle.disabled = snapshot.platform !== "gemini" || !snapshot.debugBundleAvailable;
     rescan.disabled = false;
   }
 
@@ -199,17 +172,6 @@
     state.textContent = "正在准备本地文件…";
     chrome.tabs.sendMessage(tabId, { type: "EXPORT_CURRENT" }, (result) => {
       if (chrome.runtime.lastError || !result || !result.ok) return showError((result && result.error) || "导出失败，请查看会话页状态");
-      state.style.color = "";
-      if (statusContainer && statusContainer.dataset) statusContainer.dataset.state = "ready";
-      state.textContent = `已开始下载：${result.files.join("、")}${result.warning ? `（${result.warning}）` : ""}`;
-    });
-  });
-
-  if (debugBundle) debugBundle.addEventListener("click", () => {
-    if (tabId === null) return;
-    state.textContent = "正在准备本地 Gemini debug bundle…";
-    chrome.tabs.sendMessage(tabId, { type: "EXPORT_DEBUG_BUNDLE" }, (result) => {
-      if (chrome.runtime.lastError || !result || !result.ok) return showError((result && result.error) || "debug bundle 导出失败");
       state.style.color = "";
       if (statusContainer && statusContainer.dataset) statusContainer.dataset.state = "ready";
       state.textContent = `已开始下载：${result.files.join("、")}${result.warning ? `（${result.warning}）` : ""}`;

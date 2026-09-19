@@ -4,7 +4,7 @@
 
   const DEFINITIONS = Object.freeze({
     chatgpt: Object.freeze({ id: "chatgpt", label: "ChatGPT", hosts: ["chatgpt.com", "chat.openai.com"] }),
-    gemini: Object.freeze({ id: "gemini", label: "Gemini", hosts: ["gemini.google.com"] })
+    grok: Object.freeze({ id: "grok", label: "Grok", hosts: ["grok.com", "www.grok.com"] })
   });
 
   function parseUrl(value) {
@@ -45,9 +45,9 @@
       const index = parts.lastIndexOf("c");
       return index >= 0 && parts[index + 1] ? decodeSegment(parts[index + 1]) : null;
     }
-    if (platform === "gemini") {
-      const appIndex = parts.indexOf("app");
-      return appIndex >= 0 && parts[appIndex + 1] ? decodeSegment(parts[appIndex + 1]) : null;
+    if (platform === "grok") {
+      const match = url.pathname.match(/^\/(?:c|chat|conversation)\/([^/]+)/);
+      return match ? decodeSegment(match[1]) : null;
     }
     return null;
   }

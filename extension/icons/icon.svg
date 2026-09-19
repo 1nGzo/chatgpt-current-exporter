@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#18181b" stroke="#27272a" stroke-width="2"/>
+  <!-- Left: 3 History Dots (· ● ·) -->
+  <circle cx="40" cy="38" r="7" fill="#ffffff"/>
+  <circle cx="40" cy="64" r="11" fill="#ffffff"/>
+  <circle cx="40" cy="90" r="7" fill="#ffffff"/>
+  <!-- Right: Export / Download Arrow (↓) -->
+  <path d="M86 36 V78" stroke="#ffffff" stroke-width="11" stroke-linecap="round"/>
+  <path d="M68 64 L86 82 L104 64" stroke="#ffffff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

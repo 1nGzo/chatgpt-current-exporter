@@ -1,21 +1,32 @@
 {
   "manifest_version": 3,
   "permissions": ["storage"],
-  "name": "Current Conversation Exporter",
+  "name": "PromptDock",
   "version": "0.1.0",
-  "description": "Capture the current ChatGPT, Gemini or Grok conversation locally and export verified structured data.",
+  "description": "Navigate and export ChatGPT and Grok conversations.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
-    "default_title": "导出当前会话",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "PromptDock",
     "default_popup": "popup.html"
   },
   "content_scripts": [
     {
       "matches": [
         "https://chatgpt.com/*",
-        "https://chat.openai.com/*",
-        "https://gemini.google.com/*"
+        "https://chat.openai.com/*"
       ],
-      "js": ["core/platform.js", "adapters/gemini.js", "fallback-config.js", "injected.js"],
+      "js": ["core/platform.js", "fallback-config.js", "injected.js"],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": false
@@ -23,15 +34,13 @@
     {
       "matches": [
         "https://chatgpt.com/*",
-        "https://chat.openai.com/*",
-        "https://gemini.google.com/*"
+        "https://chat.openai.com/*"
       ],
       "js": [
         "core/platform.js",
         "core/normalized.js",
         "adapters/chatgpt.js",
         "adapters/chatgpt-navigator.js",
-        "adapters/gemini-isolated.js",
         "converter.js",
         "content.js"
       ],
@@ -59,8 +68,7 @@
       "resources": ["injected.js"],
       "matches": [
         "https://chatgpt.com/*",
-        "https://chat.openai.com/*",
-        "https://gemini.google.com/*"
+        "https://chat.openai.com/*"
       ]
     }
   ],

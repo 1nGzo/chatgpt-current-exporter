@@ -8,7 +8,6 @@
   const platform = platformCore && typeof platformCore.detectPlatform === "function"
     ? platformCore.detectPlatform(window.location.href)
     : "chatgpt";
-  const geminiAdapter = globalThis.CCEGeminiAdapter;
   const diagnostics = {
     platform,
     platformLabel: platformCore && typeof platformCore.definition === "function" ? platformCore.definition(platform).label : platform,
@@ -52,31 +51,11 @@
     lastContentType: "",
     lastResponsePath: "",
     observedResponsePaths: [],
-    cacheSize: 0,
-    candidateResponses: 0,
-    candidateUserTurns: 0,
-    candidateAssistantTurns: 0,
-    normalizedUserTurns: 0,
-    normalizedAssistantTurns: 0,
-    possibleTotalTurns: 0,
-    topLevelShape: "unknown",
-    structuralSignature: "",
-    paginationDetected: false,
-    truncationDetected: false,
-    branchSelection: "NONE_DETECTED",
-    completeness: "WAITING",
-    readyReason: "等待 Gemini 结构化 response",
-    batchResponses: 0,
-    batchFrames: 0,
-    batchInnerPayloads: 0,
-    batchParseFailures: 0,
-    batchRpcIds: []
+    cacheSize: 0
   };
   const cache = new Map();
   const cacheOrder = [];
   const pageCache = [];
-  const geminiPayloadCache = [];
-  const geminiPayloadKeys = new Set();
   let originalFetch = null;
 
   const SENSITIVE_KEY = /^(?:authorization|cookie|setcookie|accesstoken|access_token|refreshtoken|refresh_token|idtoken|id_token|sessiontoken|session_token|csrftoken|csrf_token|xsrftoken|xsrf_token|apikey|api_key|clientsecret|client_secret|password|secret|credential|credentials|token)$/i;
@@ -149,9 +128,6 @@
   }
 
   function currentPageConversationId() {
-    if (platform === "gemini" && platformCore && typeof platformCore.conversationIdHint === "function") {
-      return platformCore.conversationIdHint(window.location.href, platform);
-    }
     try {
       const parts = new URL(window.location.href).pathname.split("/").filter(Boolean);
       const index = parts.lastIndexOf("c");
@@ -314,101 +290,11 @@
     diagnostics.cacheSize = cache.size;
   }
 
-  function isGeminiBatchPath(responsePath) {
-    return platform === "gemini" && /\/batchexecute(?:$|[?#])/.test(String(responsePath || ""));
-  }
-
-  function postGeminiStructure(payload, transport, contentType, responsePath, rpcId, topLevelShape) {
-    if (!geminiAdapter || typeof geminiAdapter.inspectResponse !== "function") return;
-    const report = geminiAdapter.inspectResponse(
-      payload,
-      safePath(responsePath),
-      currentPageConversationId(),
-      topLevelShape ? { topLevelShape } : {}
-    );
-    diagnostics.candidateResponses += report.possibleCandidate ? 1 : 0;
-    diagnostics.geminiConversationCandidates = diagnostics.candidateResponses;
-    diagnostics.candidateUserTurns = report.possibleUserMessages || 0;
-    diagnostics.candidateAssistantTurns = report.possibleAssistantMessages || 0;
-    diagnostics.possibleTotalTurns = report.possibleTurnCount || 0;
-    diagnostics.normalizedUserTurns = 0;
-    diagnostics.normalizedAssistantTurns = 0;
-    diagnostics.topLevelShape = report.topLevelShape || topLevelShape || "unknown";
-    diagnostics.structuralSignature = report.structuralSignature || "";
-    diagnostics.geminiLastTopLevelKeys = Array.isArray(report.topLevelKeys) ? report.topLevelKeys.slice(0, 80) : [];
-    diagnostics.geminiLastWrapperDepth = report.wrapperDepth === undefined ? null : report.wrapperDepth;
-    diagnostics.geminiLastTurnCount = report.possibleTurnCount || 0;
-    diagnostics.geminiLastUserMessages = report.possibleUserMessages || 0;
-    diagnostics.geminiLastAssistantMessages = report.possibleAssistantMessages || 0;
-    diagnostics.geminiPaginationDetected = Boolean(report.paginationDetected);
-    diagnostics.geminiPaginationSignals = Array.isArray(report.paginationSignals) ? report.paginationSignals.slice(0, 20) : [];
-    diagnostics.geminiPaginationPossible = Boolean(report.paginationPossible);
-    diagnostics.geminiTruncationDetected = Boolean(report.truncationDetected);
-    diagnostics.geminiTruncationSignals = Array.isArray(report.truncationSignals) ? report.truncationSignals.slice(0, 20) : [];
-    diagnostics.geminiCompleteness = report.completeness || "WAITING";
-    diagnostics.completeness = diagnostics.geminiCompleteness;
-    diagnostics.geminiSchemaVerified = Boolean(report.schemaVerified);
-    diagnostics.geminiOrderingValidated = Boolean(report.orderingValidated);
-    diagnostics.geminiBranchSelection = report.branchSelection || "NONE_DETECTED";
-    diagnostics.branchSelection = diagnostics.geminiBranchSelection;
-    diagnostics.geminiLastFieldHints = Array.isArray(report.fieldHints) ? report.fieldHints.slice(0, 40) : [];
-    diagnostics.geminiLastConversationId = report.conversationId || currentPageConversationId() || null;
-    diagnostics.readyReason = report.readyReason || "Gemini schema、历史聚合、顺序、candidate 和完整性尚未经过 live 验证";
-    diagnostics.lastDetectedKeys = Array.isArray(report.topLevelKeys) ? report.topLevelKeys.slice(0, 80) : [];
-    diagnostics.lastContentType = String(contentType || "");
-    diagnostics.lastResponsePath = safePath(responsePath);
-    if (report.possibleCandidate) {
-      diagnostics.lastCandidatePath = safePath(responsePath);
-      diagnostics.lastCandidateContentType = String(contentType || "");
-    }
-    const conversationRelated = Boolean(
-      report.possibleCandidate ||
-      (Array.isArray(report.fieldHints) && report.fieldHints.length) ||
-      report.paginationDetected ||
-      report.truncationDetected ||
-      (Array.isArray(report.branchSignals) && report.branchSignals.length)
-    );
-    if (!conversationRelated) {
-      publishStatus();
-      return;
-    }
-    const storedPayload = redactSensitiveFields(payload);
-    const cacheKey = `${diagnostics.lastResponsePath}|${rpcId || ""}|${report.structuralSignature || ""}|${report.possibleTurnCount || 0}|${payloadFingerprint(storedPayload)}`;
-    if (!geminiPayloadKeys.has(cacheKey)) {
-      geminiPayloadKeys.add(cacheKey);
-      geminiPayloadCache.push({
-        payload: storedPayload,
-        report,
-        conversationId: report.conversationId || currentPageConversationId(),
-        transport: String(transport || "unknown"),
-        contentType: String(contentType || ""),
-        responsePath: safePath(responsePath),
-        rpcId: rpcId || null,
-        capturedAt: new Date().toISOString()
-      });
-      while (geminiPayloadCache.length > 160) geminiPayloadCache.shift();
-    }
-    window.postMessage({
-      source: SOURCE,
-      type: "gemini-structure",
-      report: { ...report, platform, transport: String(transport || "unknown"), rpcId: rpcId || null },
-      payload: storedPayload,
-      contentType: String(contentType || ""),
-      responsePath: safePath(responsePath),
-      rpcId: rpcId || null
-    }, "*");
-    publishStatus();
-  }
-
   function observePayload(payload, transport, contentType, responsePath, rpcId, topLevelShape) {
     diagnostics.jsonCandidates += 1;
     diagnostics.lastDetectedKeys = safeKeys(payload);
     diagnostics.lastContentType = String(contentType || "");
     if (responsePath) diagnostics.lastResponsePath = responsePath;
-    if (platform === "gemini") {
-      postGeminiStructure(payload, transport, contentType, responsePath, rpcId, topLevelShape);
-      return;
-    }
     const payloadSchema = schema(payload);
     if (payloadSchema.schemaType !== "none") {
       diagnostics.lastSchema = payloadSchema;
@@ -445,38 +331,8 @@
     }
   }
 
-  function observeStructuredText(text, transport, contentType, responsePath) {
-    if (platform !== "gemini" || !geminiAdapter || typeof geminiAdapter.parseStructuredTextReport !== "function") {
-      observeJsonText(text, transport, contentType, responsePath);
-      return;
-    }
-    const report = geminiAdapter.parseStructuredTextReport(text);
-    diagnostics.batchResponses += isGeminiBatchPath(responsePath) || report.recognizedEnvelope || report.lengthPrefixed ? 1 : 0;
-    diagnostics.batchFrames += Number(report.frameCount) || 0;
-    diagnostics.batchInnerPayloads += Number(report.innerPayloads) || 0;
-    diagnostics.batchParseFailures += Number(report.parseFailures) || 0;
-    if (Array.isArray(report.rpcIds)) diagnostics.batchRpcIds = Array.from(new Set(diagnostics.batchRpcIds.concat(report.rpcIds))).slice(-40);
-    const records = Array.isArray(report.payloadRecords) ? report.payloadRecords : [];
-    records.forEach((record) => postGeminiStructure(record.payload, transport, contentType, responsePath, record.rpcId, report.topLevelShape));
-    if (!records.length) {
-      diagnostics.jsonParseErrors += 1;
-      publishStatus();
-    }
-  }
-
   function observeStreamText(text, transport, contentType, responsePath) {
     const raw = String(text || "");
-    if (platform === "gemini") {
-      let frameCount = 0;
-      for (const line of raw.split(/\r?\n/)) {
-        const match = /^data:\s*(.+)$/.exec(line);
-        if (!match || match[1] === "[DONE]") continue;
-        frameCount += 1;
-        observeStructuredText(match[1], transport, contentType, responsePath);
-      }
-      if (!frameCount) observeStructuredText(raw, transport, contentType, responsePath);
-      return;
-    }
     for (const line of raw.split(/\r?\n/)) {
       const match = /^data:\s*(.+)$/.exec(line);
       if (!match || match[1] === "[DONE]") continue;
@@ -497,11 +353,6 @@
     return typeof contentType === "string" && (contentType.includes("text/event-stream") || contentType.includes("ndjson"));
   }
 
-  function isInspectableGeminiResponse(contentType, responsePath) {
-    if (isGeminiBatchPath(responsePath) || !contentType) return true;
-    return isJsonContentType(contentType) || /^text\//i.test(String(contentType));
-  }
-
   if (typeof window.fetch === "function") {
     originalFetch = window.fetch;
     diagnostics.fetchHooked = true;
@@ -514,12 +365,7 @@
           const contentType = response.headers && response.headers.get("content-type");
           const responsePath = rememberPath(response.url);
           diagnostics.lastContentType = String(contentType || "");
-          if (platform === "gemini" && !isStreamContentType(contentType) && isInspectableGeminiResponse(contentType, responsePath)) {
-            response.clone().text().then((text) => observeStructuredText(text, "fetch", contentType, responsePath)).catch(() => {
-              diagnostics.jsonParseErrors += 1;
-              publishStatus();
-            });
-          } else if (isJsonContentType(contentType) || !contentType) {
+          if (isJsonContentType(contentType) || !contentType) {
             response.clone().json().then((payload) => observePayload(payload, "fetch", contentType, responsePath)).catch(() => {
               diagnostics.jsonParseErrors += 1;
               publishStatus();
@@ -559,10 +405,7 @@
           const contentType = this.getResponseHeader("content-type") || "";
           const responsePath = rememberPath(this.responseURL || this.__CCE_REQUEST_URL__);
           diagnostics.lastContentType = String(contentType);
-          if (platform === "gemini" && !isStreamContentType(contentType) && isInspectableGeminiResponse(contentType, responsePath)) {
-            const responseText = this.responseType === "json" ? JSON.stringify(this.response) : this.responseText;
-            observeStructuredText(responseText, "xhr", contentType, responsePath);
-          } else if (this.responseType === "json") {
+          if (this.responseType === "json") {
             observePayload(this.response, "xhr", contentType, responsePath);
           } else if (isStreamContentType(contentType)) {
             diagnostics.streamResponses += 1;
@@ -583,10 +426,6 @@
     diagnostics.webSocketMessages += 1;
     const responsePath = "(WebSocket)";
     if (typeof data === "string") {
-      if (platform === "gemini") {
-        observeStructuredText(data, "websocket", "", responsePath);
-        return;
-      }
       try {
         observePayload(JSON.parse(data), "websocket", "", responsePath);
       } catch (_) {
@@ -1109,15 +948,6 @@
             responsePath: "(cache)"
           }, "*");
         }
-      }
-      if (platform === "gemini") {
-        const currentId = currentPageConversationId();
-        for (const record of geminiPayloadCache) {
-          if (record.conversationId && currentId && record.conversationId !== currentId) continue;
-          postGeminiStructure(record.payload, "cache-rescan", record.contentType, record.responsePath, record.rpcId, record.report && record.report.topLevelShape);
-        }
-        publishStatus();
-        return;
       }
       const currentId = currentPageConversationId();
       if (currentId && cache.has(currentId)) {

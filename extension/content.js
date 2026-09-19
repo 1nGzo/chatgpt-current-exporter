@@ -4,30 +4,16 @@
   const SOURCE = "chatgpt-current-exporter";
   const converter = globalThis.CCEConversationConverter;
   const platformCore = globalThis.CCEPlatformCore;
-  function fallbackPlatformFromUrl(value) {
-    try {
-      const hostname = new URL(value).hostname.toLowerCase();
-      if (hostname === "gemini.google.com" || hostname.endsWith(".gemini.google.com")) return "gemini";
-    } catch (_) {
-      // URL parsing failure is handled by the existing unsupported fallback.
-    }
-    return "chatgpt";
-  }
   let platformId = platformCore && typeof platformCore.detectPlatform === "function"
     ? platformCore.detectPlatform(window.location.href)
-    : fallbackPlatformFromUrl(window.location.href);
-  if (platformId === "unsupported") platformId = fallbackPlatformFromUrl(window.location.href);
+    : "chatgpt";
+  if (platformId === "unsupported") platformId = "chatgpt";
   let platformDefinition = platformCore && typeof platformCore.definition === "function"
     ? platformCore.definition(platformId)
     : { id: platformId, label: platformId };
-  function currentGeminiAdapter() {
-    return globalThis.CCEGeminiAdapter || globalThis.CCEGeminiIsolatedAdapter || null;
-  }
   const captured = new Map();
   const basePayloads = new Map();
   const messagePages = new Map();
-  const geminiRecords = [];
-  const geminiRecordKeys = new Set();
   const runtimeDiagnostics = {
     extension: true,
     platform: platformId,
@@ -68,50 +54,7 @@
     observedResponsePaths: [],
     rejectedIdMismatches: 0,
     lastRescan: "",
-    candidateResponses: 0,
-    candidateUserTurns: 0,
-    candidateAssistantTurns: 0,
-    normalizedUserTurns: 0,
-    normalizedAssistantTurns: 0,
-    possibleTotalTurns: 0,
-    topLevelShape: "unknown",
-    structuralSignature: "",
-    paginationDetected: false,
-    truncationDetected: false,
-    branchSelection: "NONE_DETECTED",
-    completeness: "WAITING",
-    readyReason: "等待结构化 response",
-    geminiConversationCandidates: 0,
-    geminiLastTopLevelKeys: [],
-    geminiLastWrapperDepth: null,
-    geminiLastTurnCount: 0,
-    geminiLastUserMessages: 0,
-    geminiLastAssistantMessages: 0,
-    geminiPaginationDetected: false,
-    geminiPaginationSignals: [],
-    geminiPaginationPossible: false,
-    geminiTruncationDetected: false,
-    geminiTruncationSignals: [],
-    geminiCompleteness: "WAITING",
-    geminiSchemaVerified: false,
-    geminiOrderingValidated: false,
-    geminiSchemaVariant: "unknown",
-    geminiBranchSelection: "NONE_DETECTED",
-    geminiLastFieldHints: [],
-    geminiLastConversationId: null,
-    geminiResponseCount: 0,
-    geminiLastRpcId: null,
-    geminiLastCandidatePath: "",
-    geminiLastCandidateContentType: "",
-    geminiRpcSummaries: [],
-    geminiAdapterLoaded: Boolean(currentGeminiAdapter() && typeof currentGeminiAdapter().inspectBundle === "function"),
-    geminiAdapterMode: "adapter",
-    geminiAdapterError: "",
-    batchResponses: 0,
-    batchFrames: 0,
-    batchInnerPayloads: 0,
-    batchParseFailures: 0,
-    batchRpcIds: []
+    readyReason: "等待结构化 response"
   };
   let currentId = currentConversationId();
   let lastError = "";
@@ -133,20 +76,6 @@
   }
 
   function currentConversationId() {
-    if (platformId === "gemini") {
-      if (platformCore && typeof platformCore.conversationIdHint === "function") {
-        const hinted = platformCore.conversationIdHint(window.location.href, platformId);
-        if (hinted) return hinted;
-      }
-      try {
-        const parts = new URL(window.location.href).pathname.split("/").filter(Boolean);
-        const appIndex = parts.indexOf("app");
-        if (appIndex >= 0 && parts[appIndex + 1]) return decodeURIComponent(parts[appIndex + 1]);
-      } catch (_) {
-        return null;
-      }
-      return null;
-    }
     try {
       const parts = new URL(window.location.href).pathname.split("/").filter(Boolean);
       const index = parts.lastIndexOf("c");
@@ -182,217 +111,6 @@
     } catch (_) {
       return "unserializable";
     }
-  }
-
-  function aggregateGeminiReports(reason) {
-    const reports = geminiRecords.map((record) => record && record.report).filter((report) => report && typeof report === "object");
-    const ids = new Set();
-    let anonymousUser = 0;
-    let anonymousAssistant = 0;
-    for (const report of reports) {
-      for (const item of Array.isArray(report.candidateMessageKeys) ? report.candidateMessageKeys : []) {
-        if (item && item.id) ids.add(`${item.role}:${item.id}`);
-        else if (item && item.role === "user") anonymousUser += 1;
-        else if (item && item.role === "assistant") anonymousAssistant += 1;
-      }
-    }
-    const userIds = Array.from(ids).filter((key) => key.startsWith("user:")).length;
-    const assistantIds = Array.from(ids).filter((key) => key.startsWith("assistant:")).length;
-    const candidateUserTurns = userIds || anonymousUser;
-    const candidateAssistantTurns = assistantIds || anonymousAssistant;
-    const candidateResponses = reports.filter((report) => report.possibleCandidate).length;
-    const normalizedUserTurns = userIds || Math.max(0, ...reports.map((report) => Number(report.normalizedUserMessages) || 0));
-    const normalizedAssistantTurns = assistantIds || Math.max(0, ...reports.map((report) => Number(report.normalizedAssistantMessages) || 0));
-    const incomplete = reports.some((report) => report.completeness === "INCOMPLETE") || Math.abs(candidateUserTurns - candidateAssistantTurns) > 1;
-    return {
-      responseCount: geminiRecords.length,
-      candidateResponses,
-      candidateUserTurns,
-      candidateAssistantTurns,
-      normalizedUserTurns,
-      normalizedAssistantTurns,
-      possibleTotalTurns: candidateUserTurns + candidateAssistantTurns,
-      topLevelShape: reports.length ? reports[reports.length - 1].topLevelShape || "unknown" : "unknown",
-      lastTopLevelKeys: reports.length && Array.isArray(reports[reports.length - 1].topLevelKeys) ? reports[reports.length - 1].topLevelKeys : [],
-      structuralSignature: reports.length ? reports[reports.length - 1].structuralSignature || "" : "",
-      paginationDetected: reports.some((report) => report.paginationDetected),
-      paginationPossible: reports.some((report) => report.paginationPossible),
-      paginationSignals: Array.from(new Set(reports.flatMap((report) => report.paginationSignals || []))),
-      truncationDetected: reports.some((report) => report.truncationDetected),
-      truncationSignals: Array.from(new Set(reports.flatMap((report) => report.truncationSignals || []))),
-      branchSelection: reports.some((report) => report.branchSelection === "UNVERIFIED") ? "UNVERIFIED" : "NONE_DETECTED",
-      completeness: incomplete ? "INCOMPLETE" : candidateResponses ? "UNVERIFIED" : "WAITING",
-      ready: false,
-      readyReason: reason || "Gemini adapter 未加载；使用结构报告聚合，正式导出仍关闭",
-      schemaVerified: reports.length > 0 && reports.every((report) => Boolean(report.schemaVerified)),
-      orderingValidated: reports.length > 0 && reports.every((report) => Boolean(report.orderingValidated)),
-      schemaVariant: reports.length ? reports[reports.length - 1].schemaVariant || "unknown" : "unknown",
-      normalizedMessages: [],
-      reports
-    };
-  }
-
-  function geminiAggregate() {
-    const geminiAdapter = currentGeminiAdapter();
-    runtimeDiagnostics.geminiAdapterLoaded = Boolean(geminiAdapter && typeof geminiAdapter.inspectBundle === "function");
-    if (!runtimeDiagnostics.geminiAdapterLoaded) {
-      runtimeDiagnostics.geminiAdapterMode = "report-fallback";
-      return aggregateGeminiReports("Gemini isolated adapter 未加载；使用 page-world 结构报告聚合，正式导出仍关闭");
-    }
-    try {
-      const aggregate = geminiAdapter.inspectBundle(geminiRecords, currentId);
-      const reportCandidateCount = geminiRecords.filter((record) => record && record.report && record.report.possibleCandidate).length;
-      if (reportCandidateCount > 0 && (!aggregate || aggregate.candidateResponses === 0)) {
-        runtimeDiagnostics.geminiAdapterMode = "report-fallback";
-        return aggregateGeminiReports("Gemini isolated adapter 聚合为空；使用 page-world 结构报告聚合，正式导出仍关闭");
-      }
-      runtimeDiagnostics.geminiAdapterMode = "adapter";
-      runtimeDiagnostics.geminiAdapterError = "";
-      return aggregate;
-    } catch (error) {
-      runtimeDiagnostics.geminiAdapterMode = "report-fallback";
-      runtimeDiagnostics.geminiAdapterError = error && error.message ? String(error.message) : String(error);
-      return aggregateGeminiReports(`Gemini isolated adapter 聚合失败；使用 page-world 结构报告聚合：${runtimeDiagnostics.geminiAdapterError}`);
-    }
-  }
-
-  function syncGeminiDiagnostics() {
-    if (platformId !== "gemini") return geminiAggregate();
-    const aggregate = geminiAggregate();
-    const last = geminiRecords.length ? geminiRecords[geminiRecords.length - 1].report : null;
-    const lastCandidateRecord = [...geminiRecords].reverse().find((record) => record && record.report && record.report.possibleCandidate) || null;
-    runtimeDiagnostics.geminiResponseCount = aggregate.responseCount || geminiRecords.length;
-    runtimeDiagnostics.candidateResponses = aggregate.candidateResponses || 0;
-    runtimeDiagnostics.geminiConversationCandidates = runtimeDiagnostics.candidateResponses;
-    runtimeDiagnostics.candidateUserTurns = aggregate.candidateUserTurns || 0;
-    runtimeDiagnostics.candidateAssistantTurns = aggregate.candidateAssistantTurns || 0;
-    runtimeDiagnostics.normalizedUserTurns = aggregate.normalizedUserTurns || 0;
-    runtimeDiagnostics.normalizedAssistantTurns = aggregate.normalizedAssistantTurns || 0;
-    runtimeDiagnostics.possibleTotalTurns = aggregate.possibleTotalTurns || 0;
-    runtimeDiagnostics.topLevelShape = aggregate.topLevelShape || "unknown";
-    runtimeDiagnostics.structuralSignature = aggregate.structuralSignature || "";
-    runtimeDiagnostics.paginationDetected = Boolean(aggregate.paginationDetected);
-    runtimeDiagnostics.geminiPaginationDetected = runtimeDiagnostics.paginationDetected;
-    runtimeDiagnostics.geminiPaginationSignals = Array.isArray(aggregate.paginationSignals) ? aggregate.paginationSignals.slice(0, 20) : [];
-    runtimeDiagnostics.geminiPaginationPossible = Boolean(aggregate.paginationPossible);
-    runtimeDiagnostics.truncationDetected = Boolean(aggregate.truncationDetected);
-    runtimeDiagnostics.geminiTruncationDetected = runtimeDiagnostics.truncationDetected;
-    runtimeDiagnostics.geminiTruncationSignals = Array.isArray(aggregate.truncationSignals) ? aggregate.truncationSignals.slice(0, 20) : [];
-    runtimeDiagnostics.completeness = aggregate.completeness || "WAITING";
-    runtimeDiagnostics.geminiCompleteness = runtimeDiagnostics.completeness;
-    runtimeDiagnostics.branchSelection = aggregate.branchSelection || "NONE_DETECTED";
-    runtimeDiagnostics.geminiBranchSelection = runtimeDiagnostics.branchSelection;
-    runtimeDiagnostics.readyReason = aggregate.readyReason || "Gemini schema、历史聚合、顺序、candidate 和完整性尚未经过 live 验证";
-    runtimeDiagnostics.geminiSchemaVerified = Boolean(aggregate.schemaVerified);
-    runtimeDiagnostics.geminiOrderingValidated = Boolean(aggregate.orderingValidated);
-    runtimeDiagnostics.geminiSchemaVariant = aggregate.schemaVariant || "unknown";
-    const rpcMap = new Map();
-    for (const record of geminiRecords) {
-      const rpcId = record.rpcId || "(none)";
-      const summary = rpcMap.get(rpcId) || { rpcId, responses: 0, candidates: 0, users: 0, assistants: 0, maxUsers: 0, maxAssistants: 0, shapes: [] };
-      const report = record.report || {};
-      summary.responses += 1;
-      summary.candidates += report.possibleCandidate ? 1 : 0;
-      summary.users += report.possibleUserMessages || 0;
-      summary.assistants += report.possibleAssistantMessages || 0;
-      summary.maxUsers = Math.max(summary.maxUsers, report.possibleUserMessages || 0);
-      summary.maxAssistants = Math.max(summary.maxAssistants, report.possibleAssistantMessages || 0);
-      if (report.topLevelShape && !summary.shapes.includes(report.topLevelShape)) summary.shapes.push(report.topLevelShape);
-      rpcMap.set(rpcId, summary);
-    }
-    runtimeDiagnostics.geminiRpcSummaries = Array.from(rpcMap.values()).slice(-40);
-    if (last) {
-      runtimeDiagnostics.geminiLastTopLevelKeys = Array.isArray(last.topLevelKeys) ? last.topLevelKeys.slice(0, 80) : [];
-      runtimeDiagnostics.geminiLastWrapperDepth = last.wrapperDepth === undefined ? null : last.wrapperDepth;
-      runtimeDiagnostics.geminiLastTurnCount = last.possibleTurnCount || 0;
-      runtimeDiagnostics.geminiLastUserMessages = last.possibleUserMessages || 0;
-      runtimeDiagnostics.geminiLastAssistantMessages = last.possibleAssistantMessages || 0;
-      runtimeDiagnostics.geminiLastFieldHints = Array.isArray(last.fieldHints) ? last.fieldHints.slice(0, 40) : [];
-      runtimeDiagnostics.geminiLastConversationId = last.conversationId || currentId || null;
-      runtimeDiagnostics.geminiLastRpcId = geminiRecords[geminiRecords.length - 1].rpcId || null;
-    }
-    if (lastCandidateRecord) {
-      runtimeDiagnostics.geminiLastCandidatePath = lastCandidateRecord.responsePath || "";
-      runtimeDiagnostics.geminiLastCandidateContentType = lastCandidateRecord.contentType || "";
-    } else if (runtimeDiagnostics.lastCandidatePath) {
-      runtimeDiagnostics.geminiLastCandidatePath = runtimeDiagnostics.lastCandidatePath;
-      runtimeDiagnostics.geminiLastCandidateContentType = runtimeDiagnostics.lastCandidateContentType || "";
-    }
-    return aggregate;
-  }
-
-  function captureGeminiStructure(event) {
-    if (platformId !== "gemini" || !event || typeof event !== "object") return;
-    const payload = event.payload;
-    if (!payload || typeof payload !== "object") return;
-    const geminiAdapter = currentGeminiAdapter();
-    const report = event.report && typeof event.report === "object"
-      ? event.report
-      : (geminiAdapter && typeof geminiAdapter.inspectResponse === "function"
-        ? geminiAdapter.inspectResponse(payload, event.responsePath, currentId)
-        : null);
-    const responsePath = typeof event.responsePath === "string" ? event.responsePath : "(unavailable)";
-    const rpcId = event.rpcId ? String(event.rpcId) : "";
-    const fingerprint = payloadFingerprint(payload);
-    const key = `${responsePath}|${rpcId}|${fingerprint}`;
-    if (geminiRecordKeys.has(key)) return;
-    geminiRecordKeys.add(key);
-    geminiRecords.push({
-      payload,
-      report,
-      transport: typeof event.transport === "string" ? event.transport : "unknown",
-      contentType: typeof event.contentType === "string" ? event.contentType : "",
-      responsePath,
-      rpcId: rpcId || null,
-      capturedAt: new Date().toISOString()
-    });
-    while (geminiRecords.length > 200) geminiRecords.shift();
-    syncGeminiDiagnostics();
-    updatePanel();
-  }
-
-  function geminiDebugBundle() {
-    const aggregate = syncGeminiDiagnostics();
-    return {
-      exporter_metadata: {
-        platform: "gemini",
-        raw_type: "bundle",
-        schema_status: aggregate.completeness || "WAITING",
-        conversation_id: currentId || runtimeDiagnostics.geminiLastConversationId || null,
-        title: currentConversationTitle(),
-        source_url: safeCurrentUrl(),
-        captured_at: new Date().toISOString(),
-        response_count: geminiRecords.length,
-        note: "Local debug bundle of structured responses; not an assertion that Gemini history is complete."
-      },
-      diagnostics: {
-        candidateResponses: aggregate.candidateResponses || 0,
-        candidateUserTurns: aggregate.candidateUserTurns || 0,
-        candidateAssistantTurns: aggregate.candidateAssistantTurns || 0,
-        normalizedUserTurns: aggregate.normalizedUserTurns || 0,
-        normalizedAssistantTurns: aggregate.normalizedAssistantTurns || 0,
-        possibleTotalTurns: aggregate.possibleTotalTurns || 0,
-        schemaVariant: aggregate.schemaVariant || "unknown",
-        schemaVerified: Boolean(aggregate.schemaVerified),
-        orderingValidated: Boolean(aggregate.orderingValidated),
-        rpcSummaries: runtimeDiagnostics.geminiRpcSummaries,
-        completeness: aggregate.completeness || "WAITING",
-        branchSelection: aggregate.branchSelection || "NONE_DETECTED",
-        paginationDetected: Boolean(aggregate.paginationDetected),
-        truncationDetected: Boolean(aggregate.truncationDetected),
-        ready: false,
-        readyReason: aggregate.readyReason || "Gemini schema 尚未经过 live 验证"
-      },
-      responses: geminiRecords.map((record) => ({
-        transport: record.transport,
-        content_type: record.contentType,
-        response_path: record.responsePath,
-        rpc_id: record.rpcId,
-        captured_at: record.capturedAt,
-        structure: record.report,
-        payload: record.payload
-      }))
-    };
   }
 
   function pageInfoOf(payload) {
@@ -503,18 +221,8 @@
       return "已捕获 conversation，active path 可导出";
     }
     if (lastError) return lastError;
-    if (platformId === "gemini") {
-      const aggregate = syncGeminiDiagnostics();
-      if (!currentId) return "当前 Gemini URL 未识别 /app/<conversation_id>";
-      if (!runtimeDiagnostics.injected) return "Gemini page-world observer 尚未确认注入；请刷新当前页面";
-      if (aggregate.completeness === "INCOMPLETE") return `Gemini completeness=INCOMPLETE：${[...(aggregate.paginationSignals || []), ...(aggregate.truncationSignals || [])].join(", ") || "count sanity check failed"}；暂不导出`;
-      if (aggregate.candidateResponses > 0) return aggregate.readyReason || "已发现 Gemini 结构化 candidate，但 schema、历史聚合、顺序、分支和完整性尚未验证；暂不导出";
-      if (runtimeDiagnostics.jsonCandidates > 0 || runtimeDiagnostics.batchResponses > 0) return "已观察 Gemini response，但尚未确认 conversation turn schema；当前仅诊断";
-      if (runtimeDiagnostics.fetchObserved || runtimeDiagnostics.xhrObserved || runtimeDiagnostics.streamResponses || runtimeDiagnostics.webSocketMessages) return "已观察 Gemini 请求，但尚未发现可识别 turn；当前仅诊断";
-      return "等待 Gemini 结构化 response；刷新当前会话后重试";
-    }
     if (runtimeDiagnostics.paginationState === "waiting-older-pages") return "当前 conversation 仍有旧消息分页；请继续向上滚动至最顶端后重新扫描";
-    if (!currentId) return "当前 URL 未识别 /c/<conversation_id>";
+    if (!currentId) return "当前 URL 未识别 conversation id";
     if (!runtimeDiagnostics.injected) return "尚未确认 injected.js 在 page world 运行";
     if (runtimeDiagnostics.fallbackSkipReason === "config-not-loaded") return "fallback adapter 未加载；请重新加载扩展并刷新当前页面";
     if (runtimeDiagnostics.fallbackLastResult === "json-without-mapping") return "当前 conversation endpoint 返回了 JSON，但没有发现 mapping；未生成不完整导出";
@@ -534,51 +242,6 @@
   }
 
   function status() {
-    if (platformId === "gemini") {
-      const aggregate = syncGeminiDiagnostics();
-      const reason = readyReason(null);
-      const incomplete = aggregate.completeness === "INCOMPLETE";
-      return {
-        extension: true,
-        platform: platformId,
-        platformLabel: platformDefinition.label,
-        conversationId: currentId || runtimeDiagnostics.geminiLastConversationId || null,
-        title: currentConversationTitle(),
-        capturedAt: geminiRecords.length ? geminiRecords[geminiRecords.length - 1].capturedAt : null,
-        captured: false,
-        mappingNodes: 0,
-        activePathNodes: 0,
-        activePathMessages: 0,
-        rawJsonSize: 0,
-        pagesCaptured: 0,
-        incompleteReasons: incomplete ? [reason] : [],
-        warnings: [],
-        warningSummary: "",
-        state: lastError ? "Error" : incomplete ? "Error" : "Waiting",
-        readyReason: reason,
-        debugBundleAvailable: geminiRecords.length > 0,
-        diagnostics: {
-          ...runtimeDiagnostics,
-          currentUrl: safeCurrentUrl(),
-          platform: platformId,
-          platformLabel: platformDefinition.label,
-          conversationId: currentId || runtimeDiagnostics.geminiLastConversationId || null,
-          conversationTitle: currentConversationTitle(),
-          pagesCaptured: 0,
-          paginationState: aggregate.paginationDetected ? "detected" : "unknown",
-          candidateResponses: aggregate.candidateResponses || 0,
-          candidateUserTurns: aggregate.candidateUserTurns || 0,
-          candidateAssistantTurns: aggregate.candidateAssistantTurns || 0,
-          normalizedUserTurns: aggregate.normalizedUserTurns || 0,
-          normalizedAssistantTurns: aggregate.normalizedAssistantTurns || 0,
-          possibleTotalTurns: aggregate.possibleTotalTurns || 0,
-          completeness: aggregate.completeness || "WAITING",
-          readyReason: reason,
-          lastDetectedKeys: runtimeDiagnostics.geminiLastTopLevelKeys.slice(),
-          structuralSignature: runtimeDiagnostics.structuralSignature || ""
-        }
-      };
-    }
     const entry = currentEntry();
     const parsedDocument = entry ? entry.document : null;
     const stats = parsedDocument ? parsedDocument.stats : null;
@@ -634,11 +297,6 @@
 
   async function exportCurrent() {
     await namingConfigReady;
-    if (platformId === "gemini") {
-      lastError = "Gemini 当前仍是 UNVERIFIED/INCOMPLETE 诊断状态；正式 Raw + Markdown 尚未开放";
-      updatePanel();
-      return { ok: false, error: lastError };
-    }
     const entry = currentEntry();
     if (!entry) {
       lastError = "尚未捕获完整 conversation 数据，可刷新当前会话后重试";
@@ -668,21 +326,6 @@
       lastError = `导出失败：${error && error.message ? error.message : String(error)}`;
       updatePanel();
       return { ok: false, error: lastError };
-    }
-  }
-
-  function exportGeminiDebugBundle() {
-    if (platformId !== "gemini" || geminiRecords.length === 0) {
-      return { ok: false, error: "尚未捕获 Gemini structured response；没有可导出的 debug bundle" };
-    }
-    try {
-      const bundle = geminiDebugBundle();
-      const stem = converter.filenameStem(currentConversationTitle(), currentId || "gemini-conversation");
-      const filename = `${stem}.gemini.debug.raw.json`;
-      downloadText(filename, `${JSON.stringify(bundle, null, 2)}\n`, "application/json");
-      return { ok: true, files: [filename] };
-    } catch (error) {
-      return { ok: false, error: `debug bundle 导出失败：${error && error.message ? error.message : String(error)}` };
     }
   }
 
@@ -729,15 +372,10 @@
         ? platformCore.definition(platformId)
         : { id: platformId, label: platformId };
       currentId = currentConversationId();
-      if (platformId === "gemini") {
-        geminiRecords.length = 0;
-        geminiRecordKeys.clear();
-      }
       if (platformId === "chatgpt" && !dotHistory) {
         buildDotHistoryUI();
       }
     }
-    const aggregateOnlyKeys = new Set(["candidateResponses", "candidateUserTurns", "candidateAssistantTurns", "normalizedUserTurns", "normalizedAssistantTurns", "possibleTotalTurns", "topLevelShape", "structuralSignature", "paginationDetected", "truncationDetected", "branchSelection", "completeness", "readyReason", "geminiConversationCandidates", "geminiLastTopLevelKeys", "geminiLastWrapperDepth", "geminiLastTurnCount", "geminiLastUserMessages", "geminiLastAssistantMessages", "geminiPaginationDetected", "geminiPaginationSignals", "geminiPaginationPossible", "geminiTruncationDetected", "geminiTruncationSignals", "geminiCompleteness", "geminiSchemaVerified", "geminiOrderingValidated", "geminiSchemaVariant", "geminiBranchSelection", "geminiLastFieldHints", "geminiLastConversationId", "geminiResponseCount", "geminiLastRpcId", "geminiLastCandidatePath", "geminiLastCandidateContentType", "geminiRpcSummaries"]);
     for (const key of ["injected", "fetchObserved", "xhrObserved", "jsonCandidates", "conversationCandidates", "jsonParseErrors", "streamResponses", "webSocketObserved", "webSocketMessages", "conversationEndpointObserved", "currentConversationEndpointResponses", "fallbackAttempts", "fallbackResponses", "fallbackConversationCandidates", "fallbackLastResult", "fallbackConfigured", "fallbackSkipReason", "fallbackLastEndpoint", "messagePageResponses", "messagePageCandidates", "messagePagePreviousTrue", "messagePagePreviousFalse", "messagePagePreviousUnknown", "messagePageNextTrue", "messagePageNextFalse", "messagePageNextUnknown", "cachedMessagePages", "lastMessagePageKeys", "lastContentType", "lastResponsePath", "observedResponsePaths", "cacheSize", "fetchHooked", "xhrHooked", "lastCandidatePath", "lastCandidateContentType"]) {
       if (info[key] !== undefined) runtimeDiagnostics[key] = info[key];
     }
@@ -746,16 +384,6 @@
     if (Array.isArray(info.lastMessagePageKeys)) runtimeDiagnostics.lastMessagePageKeys = info.lastMessagePageKeys.slice(0, 80);
     if (info.lastSchema && typeof info.lastSchema === "object") runtimeDiagnostics.lastSchema = { ...runtimeDiagnostics.lastSchema, ...info.lastSchema };
     if (info.lastEndpointSchema && typeof info.lastEndpointSchema === "object") runtimeDiagnostics.lastEndpointSchema = { ...runtimeDiagnostics.lastEndpointSchema, ...info.lastEndpointSchema };
-    for (const key of ["platform", "platformLabel", "candidateResponses", "candidateUserTurns", "candidateAssistantTurns", "normalizedUserTurns", "normalizedAssistantTurns", "possibleTotalTurns", "topLevelShape", "structuralSignature", "paginationDetected", "truncationDetected", "branchSelection", "completeness", "readyReason", "geminiConversationCandidates", "geminiLastTopLevelKeys", "geminiLastWrapperDepth", "geminiLastTurnCount", "geminiLastUserMessages", "geminiLastAssistantMessages", "geminiPaginationDetected", "geminiPaginationSignals", "geminiPaginationPossible", "geminiTruncationDetected", "geminiTruncationSignals", "geminiCompleteness", "geminiSchemaVerified", "geminiOrderingValidated", "geminiSchemaVariant", "geminiBranchSelection", "geminiLastFieldHints", "geminiLastConversationId", "geminiResponseCount", "geminiLastRpcId", "geminiLastCandidatePath", "geminiLastCandidateContentType", "geminiRpcSummaries", "batchResponses", "batchFrames", "batchInnerPayloads", "batchParseFailures", "batchRpcIds"]) {
-      if (info[key] !== undefined && !(platformId === "gemini" && aggregateOnlyKeys.has(key))) runtimeDiagnostics[key] = info[key];
-    }
-    if (Array.isArray(info.geminiLastTopLevelKeys)) runtimeDiagnostics.geminiLastTopLevelKeys = info.geminiLastTopLevelKeys.slice(0, 80);
-    if (Array.isArray(info.geminiPaginationSignals)) runtimeDiagnostics.geminiPaginationSignals = info.geminiPaginationSignals.slice(0, 20);
-    if (Array.isArray(info.geminiTruncationSignals)) runtimeDiagnostics.geminiTruncationSignals = info.geminiTruncationSignals.slice(0, 20);
-    if (Array.isArray(info.geminiLastFieldHints)) runtimeDiagnostics.geminiLastFieldHints = info.geminiLastFieldHints.slice(0, 40);
-    if (Array.isArray(info.batchRpcIds)) runtimeDiagnostics.batchRpcIds = info.batchRpcIds.slice(-40);
-    if (Array.isArray(info.geminiRpcSummaries)) runtimeDiagnostics.geminiRpcSummaries = info.geminiRpcSummaries.slice(-40);
-    if (platformId === "gemini" && geminiRecords.length) syncGeminiDiagnostics();
     updatePanel();
   }
 
@@ -923,7 +551,7 @@
           gap: 2px;
         }
         .cce-format-menu.is-open { display: flex; }
-        .cce-format-item, .cce-debug-item {
+        .cce-format-item {
           width: 100%;
           padding: 6px 8px;
           border: 0;
@@ -939,7 +567,7 @@
           justify-content: space-between;
           transition: background-color 120ms ease;
         }
-        .cce-format-item:hover, .cce-debug-item:hover { background: var(--cce-surface-hover); }
+        .cce-format-item:hover { background: var(--cce-surface-hover); }
         .cce-format-item.is-selected { font-weight: 600; }
         .cce-format-item.is-selected::after { content: "✓"; font-size: 11px; }
       </style>
@@ -957,7 +585,6 @@
           <button class="cce-format-item" data-format="markdown" type="button" role="menuitem">Markdown</button>
           <button class="cce-format-item" data-format="json" type="button" role="menuitem">JSON</button>
           <button class="cce-format-item" data-format="both" type="button" role="menuitem">Markdown + JSON</button>
-          <button class="cce-debug-item" type="button" role="menuitem" style="display:none;">Debug Bundle</button>
         </div>
       </div>`;
 
@@ -967,7 +594,6 @@
     const label = shadow.querySelector(".cce-quick-label");
     const formatMenu = shadow.querySelector(".cce-format-menu");
     const formatItems = Array.from(shadow.querySelectorAll(".cce-format-item"));
-    const debugItem = shadow.querySelector(".cce-debug-item");
 
     let currentFormat = "markdown";
 
@@ -995,7 +621,9 @@
       historyBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         closeFormatMenu();
-        if (dotHistory && typeof dotHistory.toggleRail === "function") {
+        if (dotHistory && typeof dotHistory.toggleHistory === "function") {
+          dotHistory.toggleHistory();
+        } else if (dotHistory && typeof dotHistory.toggleRail === "function") {
           dotHistory.toggleRail();
         }
       });
@@ -1050,14 +678,6 @@
       });
     });
 
-    if (debugItem) {
-      debugItem.addEventListener("click", (e) => {
-        e.stopPropagation();
-        closeFormatMenu();
-        exportGeminiDebugBundle();
-      });
-    }
-
     document.addEventListener("click", (e) => {
       if (!host.contains(e.target)) closeFormatMenu();
     });
@@ -1067,7 +687,6 @@
       btn: exportBtn,
       label,
       historyBtn,
-      debugItem,
       setHistoryActive: (active) => {
         if (historyBtn) historyBtn.classList.toggle("is-active", !!active);
       },
@@ -1075,9 +694,6 @@
         const ready = snapshot.captured && snapshot.incompleteReasons.length === 0 && snapshot.activePathMessages > 0;
         exportBtn.disabled = !ready;
         exportBtn.title = ready ? "导出当前会话" : (lastError || snapshot.readyReason || "等待捕获会话数据…");
-        if (debugItem) {
-          debugItem.style.display = platformId === "gemini" && snapshot.debugBundleAvailable ? "flex" : "none";
-        }
       }
     };
 
@@ -1160,6 +776,7 @@
           border-color: var(--cce-text-tertiary);
         }
         .cce-dot-handle:focus-visible { outline: 1px solid var(--cce-text-secondary); outline-offset: 1px; }
+        .cce-dot-handle.is-hidden { display: none !important; }
         .cce-dot-handle-mark { display: flex; gap: 3.5px; align-items: center; }
         .cce-dot-handle-mark i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; display: block; }
 
@@ -1394,7 +1011,7 @@
         .cce-history-empty.is-hidden { display: none; }
       </style>
       <div class="cce-dot-shell cce-theme-light">
-        <button class="cce-dot-handle" type="button" aria-label="Open prompt history" title="Prompt History">
+        <button class="cce-dot-handle is-hidden" type="button" aria-label="Open prompt history" title="Prompt History">
           <span class="cce-dot-handle-mark" aria-hidden="true">
             <i></i><i></i><i></i>
           </span>
@@ -1441,7 +1058,7 @@
     const historyList = shadow.querySelector(".cce-history-list");
     const historyEmpty = shadow.querySelector(".cce-history-empty");
 
-    let isRailExpanded = false;
+    let isHistoryActive = false;
     let isHistoryWindowOpen = false;
     let initializedForCurrent = false;
     let currentItems = [];
@@ -1688,13 +1305,14 @@
       }
     }
 
-    function setRailExpanded(expanded) {
-      isRailExpanded = expanded;
-      timeline.classList.toggle("is-hidden", !expanded);
+    function setHistoryActive(active) {
+      isHistoryActive = Boolean(active);
+      handle.classList.toggle("is-hidden", !isHistoryActive);
+      timeline.classList.toggle("is-hidden", !isHistoryActive);
       if (quickExport && typeof quickExport.setHistoryActive === "function") {
-        quickExport.setHistoryActive(expanded);
+        quickExport.setHistoryActive(isHistoryActive);
       }
-      if (expanded) {
+      if (isHistoryActive) {
         if (!initializedForCurrent) {
           initializedForCurrent = true;
           globalThis.CCEHistoryNavigator.open();
@@ -1702,6 +1320,7 @@
         renderDots(navigatorBackend.getState().items);
       } else {
         hidePreview();
+        closeHistoryWindow();
       }
     }
 
@@ -1823,8 +1442,8 @@
         if (isHistoryWindowOpen) {
           closeHistoryWindow();
           handle.focus();
-        } else if (isRailExpanded) {
-          setRailExpanded(false);
+        } else if (isHistoryActive) {
+          setHistoryActive(false);
         }
       }
     });
@@ -1832,7 +1451,7 @@
     navigatorBackend.subscribe((state) => {
       if (state.items) {
         currentItems = state.items;
-        if (isRailExpanded) {
+        if (isHistoryActive) {
           renderDots(state.items);
         }
         if (isHistoryWindowOpen) {
@@ -1843,7 +1462,7 @@
 
     let scrollThrottle = null;
     function syncActiveFromViewport() {
-      if ((!isRailExpanded && !isHistoryWindowOpen) || currentItems.length === 0) return;
+      if ((!isHistoryActive && !isHistoryWindowOpen) || currentItems.length === 0) return;
       const viewportCenter = window.innerHeight / 2;
       let closestIdx = -1;
       let minDistance = Infinity;
@@ -1883,17 +1502,20 @@
 
     dotHistory = {
       root,
-      toggleRail: () => setRailExpanded(!isRailExpanded),
-      openRail: () => setRailExpanded(true),
-      closeRail: () => setRailExpanded(false),
+      isHistoryActive: () => isHistoryActive,
+      toggleHistory: () => setHistoryActive(!isHistoryActive),
+      setHistoryActive,
+      toggleRail: () => setHistoryActive(!isHistoryActive),
+      openRail: () => setHistoryActive(true),
+      closeRail: () => setHistoryActive(false),
       openWindow: openHistoryWindow,
       closeWindow: closeHistoryWindow,
       reset: () => {
         initializedForCurrent = false;
         currentItems = [];
         activeIndex = -1;
-        if (isRailExpanded) {
-          setRailExpanded(false);
+        if (isHistoryActive) {
+          setHistoryActive(false);
         }
         closeHistoryWindow();
       }
@@ -1916,7 +1538,6 @@
     if (event.data.type === "observer-status") mergeObserverDiagnostics(event.data.diagnostics);
     if (event.data.type === "conversation-response") capture(event.data.payload);
     if (event.data.type === "conversation-message-page") captureMessagePage(event.data.conversationId, event.data.payload, event.data.pageKey);
-    if (event.data.type === "gemini-structure") captureGeminiStructure(event.data);
   });
 
   if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
@@ -1929,10 +1550,6 @@
       if (message.type === "EXPORT_CURRENT") {
         exportCurrent().then(sendResponse).catch((error) => sendResponse({ ok: false, error: `导出失败：${error && error.message ? error.message : String(error)}` }));
         return true;
-      }
-      if (message.type === "EXPORT_DEBUG_BUNDLE") {
-        sendResponse(exportGeminiDebugBundle());
-        return false;
       }
       if (message.type === "RESCAN_CURRENT") {
         requestRescan();
@@ -1989,11 +1606,6 @@
         if (dotHistory && typeof dotHistory.reset === "function") {
           dotHistory.reset();
         }
-      }
-      if (platformId === "gemini") {
-        geminiRecords.length = 0;
-        geminiRecordKeys.clear();
-        syncGeminiDiagnostics();
       }
       lastError = "";
       updatePanel();

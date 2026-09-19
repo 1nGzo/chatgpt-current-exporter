@@ -13,9 +13,11 @@ const popupCss = fs.readFileSync('extension/popup.css', 'utf8');
 assert(popupHtml.includes('<details class="diagnostics-details">'), 'Diagnostics must be inside <details>');
 assert(!popupHtml.includes('<details class="diagnostics-details" open>'), 'Diagnostics must be collapsed by default');
 assert(popupHtml.includes('<summary class="diagnostics-summary">'), 'Diagnostics must have a summary header');
+assert(popupHtml.includes('<title>PromptDock</title>'), 'Title must be PromptDock');
+assert(popupHtml.includes('<h1 class="popup-title">PromptDock</h1>'), 'Heading must be PromptDock');
 assert(popupHtml.includes('id="diagnostics"'), 'Diagnostics pre element must exist');
 assert(popupHtml.includes('id="rescan"'), 'Rescan button must exist');
-assert(popupHtml.includes('id="debug-bundle"'), 'Debug bundle button must exist');
+assert(!popupHtml.includes('id="debug-bundle"'), 'Debug bundle button must not exist');
 assert(popupHtml.includes('id="export-format"'), 'Export format fieldset must exist');
 assert(popupHtml.includes('id="export"'), 'Export button must exist');
 
@@ -43,6 +45,8 @@ assert(contentSrc.includes('cce-dot-preview'), 'cce-dot-preview class must exist
 assert(contentSrc.includes('cce-history-overlay'), 'cce-history-overlay class must exist');
 assert(contentSrc.includes('cce-history-search-input'), 'cce-history-search-input class must exist');
 assert(contentSrc.includes('cce-history-list'), 'cce-history-list class must exist');
+assert(contentSrc.includes('.cce-dot-handle.is-hidden'), '.cce-dot-handle.is-hidden CSS rule must exist');
+assert(contentSrc.includes('setHistoryActive'), 'setHistoryActive must exist');
 assert(contentSrc.includes('openHistoryWindow'), 'openHistoryWindow must exist');
 assert(contentSrc.includes('previewText'), 'previewText must be used for preview');
 assert(!contentSrc.includes('preview.textContent = item.preview || item.text || `Prompt'), 'Must not fallback to pure Prompt N placeholder');
@@ -127,41 +131,63 @@ assert.equal(selectFormat('markdown'), 'MD');
 assert.equal(mockStorage.exportFormat, 'markdown');
 console.log('PASS: Test 5 passed');
 
-// 6. Interaction Responsibility & Preview Text Unit Verification
-console.log('Test 6: Interaction Responsibilities & Preview Text Generation');
+console.log('Test 6: Master Switch Interaction Responsibilities & Preview Text Generation');
 
 // Mock Dot History state
-let railExpanded = false;
+let isHistoryActive = false;
+let railVisible = false;
+let handleVisible = false;
 let historyWindowOpen = false;
 
+function setHistoryActive(active) {
+  isHistoryActive = Boolean(active);
+  railVisible = isHistoryActive;
+  handleVisible = isHistoryActive;
+  if (!isHistoryActive) {
+    historyWindowOpen = false;
+  }
+}
+
 function onHistoryBtnClick() {
-  // History button only toggles rail, NEVER opens history window
-  railExpanded = !railExpanded;
+  setHistoryActive(!isHistoryActive);
 }
 
 function onHandleBtnClick() {
-  // Handle button only toggles/opens history window, NEVER touches rail
+  // Handle click only opens/closes History Window, NEVER affects rail visibility
   historyWindowOpen = !historyWindowOpen;
 }
 
-// Initial state
-assert.equal(railExpanded, false);
+// Initial state: History OFF (default): both dot rail and handle hidden
+assert.equal(isHistoryActive, false);
+assert.equal(railVisible, false, 'Rail hidden by default');
+assert.equal(handleVisible, false, 'Handle hidden by default');
 assert.equal(historyWindowOpen, false);
 
-// Click History in dock
+// Click History in dock: switches History ON -> reveals both rail and handle
 onHistoryBtnClick();
-assert.equal(railExpanded, true, 'History click expands dot rail');
-assert.equal(historyWindowOpen, false, 'History click must not open history window');
+assert.equal(isHistoryActive, true);
+assert.equal(railVisible, true, 'History ON shows dot rail');
+assert.equal(handleVisible, true, 'History ON shows dot handle');
+assert.equal(historyWindowOpen, false, 'History ON must not automatically open history window');
 
-// Click History in dock again
-onHistoryBtnClick();
-assert.equal(railExpanded, false, 'Second History click collapses dot rail');
-assert.equal(historyWindowOpen, false, 'History click must not open history window');
-
-// Click Handle
+// Click Handle: opens History Window without toggling rail
 onHandleBtnClick();
 assert.equal(historyWindowOpen, true, 'Handle click opens history window');
-assert.equal(railExpanded, false, 'Handle click must not expand dot rail');
+assert.equal(railVisible, true, 'Rail remains visible when window opens');
+
+// Click Handle again: closes History Window without toggling rail
+onHandleBtnClick();
+assert.equal(historyWindowOpen, false, 'Handle click closes history window');
+assert.equal(railVisible, true, 'Rail remains visible when window closes');
+
+// Open window again, then click History in dock (switch OFF)
+onHandleBtnClick();
+assert.equal(historyWindowOpen, true);
+onHistoryBtnClick(); // turn OFF
+assert.equal(isHistoryActive, false);
+assert.equal(railVisible, false, 'History OFF hides dot rail');
+assert.equal(handleVisible, false, 'History OFF hides dot handle');
+assert.equal(historyWindowOpen, false, 'History OFF closes open history window');
 
 // Preview Text formatting check
 function generatePreview(item, index) {
