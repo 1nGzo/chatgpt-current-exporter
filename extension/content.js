@@ -844,6 +844,17 @@
           transform: none;
         }
         .cce-dot-node:focus-visible { outline: 1px solid var(--cce-text-secondary); outline-offset: 1px; }
+        .cce-dot-node.is-seeking .cce-dot {
+          animation: cce-dot-pulse 0.75s ease-in-out infinite alternate;
+          background: var(--cce-dot-active);
+        }
+        @keyframes cce-dot-pulse {
+          0% { opacity: 0.35; transform: scale(0.85); }
+          100% { opacity: 1; transform: scale(1.35); }
+        }
+        .cce-history-item.is-seeking {
+          opacity: 0.6;
+        }
 
         /* Dot Hover Preview Tooltip: Anchored next to hovered dot */
         .cce-dot-preview {
@@ -1289,9 +1300,16 @@
         node.addEventListener("mouseleave", hidePreview);
         node.addEventListener("focus", () => showPreview(index, node));
         node.addEventListener("blur", hidePreview);
-        node.addEventListener("click", () => {
-          navigatorBackend.jumpToPrompt(item);
-          setActiveDot(index);
+        node.addEventListener("click", async () => {
+          node.classList.add("is-seeking");
+          try {
+            const res = await navigatorBackend.jumpToPrompt(item);
+            if (res && res.ok) {
+              setActiveDot(index);
+            }
+          } finally {
+            node.classList.remove("is-seeking");
+          }
         });
 
         fragment.appendChild(node);
@@ -1367,10 +1385,20 @@
           el.appendChild(timeSpan);
         }
 
-        el.addEventListener("click", () => {
-          navigatorBackend.jumpToPrompt(item);
-          setActiveDot(itemIdx);
+        el.addEventListener("click", async () => {
+          el.classList.add("is-seeking");
+          const dotBtn = content.querySelector(`.cce-dot-node[data-index="${itemIdx}"]`);
+          if (dotBtn) dotBtn.classList.add("is-seeking");
           closeHistoryWindow();
+          try {
+            const res = await navigatorBackend.jumpToPrompt(item);
+            if (res && res.ok) {
+              setActiveDot(itemIdx);
+            }
+          } finally {
+            el.classList.remove("is-seeking");
+            if (dotBtn) dotBtn.classList.remove("is-seeking");
+          }
         });
 
         fragment.appendChild(el);

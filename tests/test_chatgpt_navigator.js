@@ -171,6 +171,10 @@ const context = {
   Node: MockElement,
   setTimeout,
   clearTimeout,
+  setInterval,
+  clearInterval,
+  AbortController: typeof AbortController !== "undefined" ? AbortController : undefined,
+  Event: typeof Event !== "undefined" ? Event : class Event { constructor(type) { this.type = type; } },
   postMessage: () => {}
 };
 context.window = context;
@@ -549,7 +553,165 @@ async function runTests() {
     console.log("PASS: Test 8 passed");
   }
 
-  console.log("\nALL 8 TESTS PASSED SUCCESSFULLY!");
+  // 9. Guaranteed History Seek on Long Virtualized Conversation
+  {
+    console.log("Test 9: Guaranteed History Seek (Nearest, Mid, Distant #1, Bidirectional & Cancellation)");
+    const testDoc = new MockDocument();
+    const scrollContainer = new MockElement("div", { "data-scroll-root": "true" });
+    scrollContainer.scrollHeight = 25000;
+    scrollContainer.clientHeight = 500;
+    testDoc.body.appendChild(scrollContainer);
+
+    // Build 50 prompt items
+    const totalPrompts = 50;
+    const promptList = [];
+    for (let i = 1; i <= totalPrompts; i++) {
+      promptList.push({
+        messageId: `msg-${i}`,
+        userOrder: i,
+        targetIndex: i * 2 - 1,
+        previewText: `Prompt #${i} content`
+      });
+    }
+
+    let mountedRange = { start: 46, end: 50 };
+    const articleMap = new Map();
+
+    function renderVirtualizedWindow(startPrompt, endPrompt) {
+      for (const node of articleMap.values()) {
+        node.remove();
+      }
+      articleMap.clear();
+
+      mountedRange = { start: startPrompt, end: endPrompt };
+      for (let i = startPrompt; i <= endPrompt; i++) {
+        const art = new MockElement(
+          "article",
+          {
+            "data-message-id": `msg-${i}`,
+            "data-testid": `conversation-turn-${i * 2 - 1}`
+          },
+          `Prompt #${i} content`
+        );
+        const userDiv = new MockElement("div", { "data-message-author-role": "user" }, `Prompt #${i} content`);
+        art.appendChild(userDiv);
+        scrollContainer.appendChild(art);
+        articleMap.set(`msg-${i}`, art);
+      }
+    }
+
+    renderVirtualizedWindow(46, 50);
+
+    let currentTop = 24500;
+    Object.defineProperty(scrollContainer, "scrollTop", {
+      get() { return currentTop; },
+      set(val) {
+        currentTop = Math.max(0, Math.min(24500, val));
+        const ratio = currentTop / 24500;
+        const centerPrompt = Math.max(3, Math.min(48, Math.round(1 + ratio * 49)));
+        renderVirtualizedWindow(Math.max(1, centerPrompt - 2), Math.min(50, centerPrompt + 2));
+      }
+    });
+
+    const mapping = { root: { id: "root", parent: null, children: ["u-1"], message: null } };
+    for (let i = 1; i <= totalPrompts; i++) {
+      const uId = `u-${i}`;
+      const aId = `a-${i}`;
+      const nextUId = i < totalPrompts ? `u-${i + 1}` : null;
+      mapping[uId] = {
+        id: uId,
+        parent: i === 1 ? "root" : `a-${i - 1}`,
+        children: [aId],
+        message: { id: `msg-${i}`, author: { role: "user" }, content: { content_type: "text", parts: [`Prompt #${i}`] } }
+      };
+      mapping[aId] = {
+        id: aId,
+        parent: uId,
+        children: nextUId ? [nextUId] : [],
+        message: { id: `asst-${i}`, author: { role: "assistant" }, content: { content_type: "text", parts: [`Answer #${i}`] } }
+      };
+    }
+
+    const backend = navigator.createChatGPTNavigatorBackend({ converter });
+    await backend.open("conv-long", {
+      conversation_id: "conv-long",
+      current_node: `a-${totalPrompts}`,
+      mapping
+    });
+
+    // 9A: Nearest Jump (from Prompt 50 to Prompt 47)
+    console.log("  - 9A: Nearest Prompt Jump (47)");
+    assert.strictEqual(testDoc.querySelector('[data-message-id="msg-47"]') !== null, true, "Prompt 47 initially in DOM");
+    const resNearest = await backend.jumpToPrompt(promptList[46], {
+      document: testDoc,
+      scrollContainer,
+      settleMs: 10
+    });
+    assert.strictEqual(resNearest.ok, true, "Nearest jump must succeed");
+    assert.strictEqual(resNearest.node.getAttribute("data-message-id"), "msg-47");
+    assert.strictEqual(resNearest.node.scrollIntoViewCalled, true, "Prompt 47 must be centered in viewport");
+
+    // 9B: Mid-range Jump (from bottom to Prompt 25)
+    console.log("  - 9B: Mid-range Prompt Jump (25)");
+    assert.strictEqual(testDoc.querySelector('[data-message-id="msg-25"]'), null, "Prompt 25 initially NOT in DOM");
+    const resMid = await backend.jumpToPrompt(promptList[24], {
+      document: testDoc,
+      scrollContainer,
+      settleMs: 10
+    });
+    assert.strictEqual(resMid.ok, true, "Mid-range jump must succeed");
+    assert.strictEqual(resMid.node.getAttribute("data-message-id"), "msg-25");
+    assert.strictEqual(resMid.node.scrollIntoViewCalled, true, "Prompt 25 must be centered in viewport");
+    assert.ok(testDoc.querySelector('[data-message-id="msg-25"]') !== null, "Prompt 25 must be materialized in DOM");
+
+    // 9C: Distant Early Jump (to Prompt 1 at top boundary)
+    console.log("  - 9C: Distant Earliest Prompt Jump (1)");
+    assert.strictEqual(testDoc.querySelector('[data-message-id="msg-1"]'), null, "Prompt 1 initially NOT in DOM");
+    const resEarly = await backend.jumpToPrompt(promptList[0], {
+      document: testDoc,
+      scrollContainer,
+      settleMs: 10
+    });
+    assert.strictEqual(resEarly.ok, true, "Distant earliest jump must succeed");
+    assert.strictEqual(resEarly.node.getAttribute("data-message-id"), "msg-1");
+    assert.strictEqual(resEarly.node.scrollIntoViewCalled, true, "Prompt 1 must be centered in viewport");
+    assert.ok(testDoc.querySelector('[data-message-id="msg-1"]') !== null, "Prompt 1 must be materialized in DOM");
+
+    // 9D: Bidirectional Seek (from earliest Prompt 1 back to latest Prompt 50)
+    console.log("  - 9D: Bidirectional Seek (Prompt 1 -> Prompt 50)");
+    assert.strictEqual(testDoc.querySelector('[data-message-id="msg-50"]'), null, "Prompt 50 not in DOM when at top");
+    const resBack = await backend.jumpToPrompt(promptList[49], {
+      document: testDoc,
+      scrollContainer,
+      settleMs: 10
+    });
+    assert.strictEqual(resBack.ok, true, "Seek back to latest prompt must succeed");
+    assert.strictEqual(resBack.node.getAttribute("data-message-id"), "msg-50");
+    assert.strictEqual(resBack.node.scrollIntoViewCalled, true, "Prompt 50 must be centered in viewport");
+    assert.ok(testDoc.querySelector('[data-message-id="msg-50"]') !== null, "Prompt 50 must be materialized in DOM");
+
+    // 9E: Cancellation of previous seek when new item clicked
+    console.log("  - 9E: Cancellation of previous seek when new item clicked");
+    const p1 = backend.jumpToPrompt(promptList[10], { document: testDoc, scrollContainer, settleMs: 50 });
+    const p2 = backend.jumpToPrompt(promptList[1], { document: testDoc, scrollContainer, settleMs: 10 });
+    const [res1, res2] = await Promise.all([p1, p2]);
+    assert.strictEqual(res1.ok, false, "First seek must be cancelled");
+    assert.strictEqual(res1.reason, "superseded");
+    assert.strictEqual(res2.ok, true, "Second seek must succeed");
+    assert.strictEqual(res2.node.getAttribute("data-message-id"), "msg-2");
+
+    // 9F: Abort on conversation switch
+    console.log("  - 9F: Cancellation on conversation switch");
+    const pConv = backend.jumpToPrompt(promptList[10], { document: testDoc, scrollContainer, settleMs: 50 });
+    backend.resetForConversation("conv-new");
+    const resConv = await pConv;
+    assert.strictEqual(resConv.ok, false, "Seek must abort on conversation change");
+    assert.strictEqual(resConv.reason, "conversation_changed");
+
+    console.log("PASS: Test 9 passed");
+  }
+
+  console.log("\nALL 9 TESTS PASSED SUCCESSFULLY!");
 }
 
 runTests().catch((err) => {

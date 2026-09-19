@@ -1,8 +1,8 @@
-# PromptDock
+# ThreadSpool
 
 > Navigate and export ChatGPT and Grok conversations.
 
-PromptDock 是一个本地优先的 Chromium Manifest V3 扩展和 Python 转换器，用于在网页端浏览提示词历史并导出当前单个 ChatGPT 或 Grok 会话：
+ThreadSpool 是一个本地优先的 Chromium Manifest V3 扩展和 Python 转换器，用于在网页端浏览提示词历史并导出当前单个 ChatGPT 或 Grok 会话：
 
 ```text
 <名称>.raw.json
@@ -80,7 +80,7 @@ CLI 会输出 title、conversation id、mapping 节点数、active path 节点�
 3. 点击“加载已解压的扩展程序”。
 4. 选择本仓库下的 `extension/` 目录。
 5. 打开或刷新 ChatGPT (`chatgpt.com/c/<conversation-id>`) 或 Grok (`grok.com/c/<conversation-id>`) 页面。
-6. 右下角会出现 PromptDock 控制条，可在弹出菜单中选择导出格式，或开启 ChatGPT 的 Prompt History 导航栏。
+6. 右下角会出现 ThreadSpool 控制条，可在弹出菜单中选择导出格式，或开启 ChatGPT 的 Prompt History 导航栏。
 
 ## 测试与校验
 

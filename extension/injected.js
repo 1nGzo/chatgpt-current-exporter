@@ -985,7 +985,7 @@
         return;
       }
 
-      const options = { align: event.data.options?.align || "center", behavior: "auto" };
+      const options = { align: event.data.options?.align || "center", behavior: "auto", offset: event.data.options?.offset };
       let lastReason = "";
       for (const index of candidates) {
         try {

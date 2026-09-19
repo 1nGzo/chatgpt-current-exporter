@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "permissions": ["storage"],
-  "name": "PromptDock",
+  "name": "ThreadSpool",
   "version": "0.1.0",
   "description": "Navigate and export ChatGPT and Grok conversations.",
   "icons": {
@@ -17,7 +17,7 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     },
-    "default_title": "PromptDock",
+    "default_title": "ThreadSpool",
     "default_popup": "popup.html"
   },
   "content_scripts": [

@@ -125,7 +125,7 @@
     state.textContent = s === "Ready" ? "Ready（已捕获完整数据）" : s === "Review" ? "Review（需检查诊断）" : s;
     platform.textContent = snapshot.platformLabel || snapshot.platform || "—";
     const h1 = document.querySelector && document.querySelector("h1");
-    if (h1) h1.textContent = "PromptDock";
+    if (h1) h1.textContent = "ThreadSpool";
     id.textContent = snapshot.conversationId || "—";
     title.textContent = snapshot.title || "—";
     captured.textContent = snapshot.capturedAt || "—";
