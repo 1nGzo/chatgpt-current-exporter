@@ -297,7 +297,14 @@
 
   async function exportCurrent() {
     await namingConfigReady;
-    const entry = currentEntry();
+    let entry = currentEntry();
+    if (!entry && currentId && typeof requestRescan === "function") {
+      requestRescan({ allowFallback: true });
+      for (let i = 0; i < 20 && !entry; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        entry = currentEntry();
+      }
+    }
     if (!entry) {
       lastError = "尚未捕获完整 conversation 数据，可刷新当前会话后重试";
       updatePanel();
@@ -387,10 +394,15 @@
     updatePanel();
   }
 
-  function requestRescan() {
+  function requestRescan(options = {}) {
     lastError = "";
     runtimeDiagnostics.lastRescan = `requested ${new Date().toISOString()}`;
-    window.postMessage({ source: SOURCE, type: "rescan", conversationId: currentId }, "*");
+    window.postMessage({
+      source: SOURCE,
+      type: "rescan",
+      conversationId: currentId,
+      allowFallback: Boolean(options && options.allowFallback)
+    }, "*");
     updatePanel();
   }
 
@@ -402,15 +414,7 @@
     if (explicit === "dark" || explicit === "light") return explicit;
     if (html?.classList.contains("dark") || body?.classList.contains("dark")) return "dark";
     if (html?.classList.contains("light") || body?.classList.contains("light")) return "light";
-    try {
-      const bg = window.getComputedStyle(body || html).backgroundColor;
-      const match = bg.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-      if (match) {
-        const lum = (0.2126 * match[1] + 0.7152 * match[2] + 0.0722 * match[3]) / 255;
-        return lum < 0.5 ? "dark" : "light";
-      }
-    } catch (_) {}
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   }
 
   function applyThemeToRoots() {
@@ -429,13 +433,20 @@
 
   function initThemeSync() {
     applyThemeToRoots();
-    const observer = new MutationObserver(() => applyThemeToRoots());
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
-    if (document.body) {
-      observer.observe(document.body, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
+    let themeRaf = null;
+    const debouncedApply = () => {
+      if (themeRaf) return;
+      themeRaf = requestAnimationFrame(() => {
+        themeRaf = null;
+        applyThemeToRoots();
+      });
+    };
+    const observer = new MutationObserver(debouncedApply);
+    if (document.documentElement) {
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme"] });
     }
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    if (media && media.addEventListener) media.addEventListener("change", applyThemeToRoots);
+    const media = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+    if (media && media.addEventListener) media.addEventListener("change", debouncedApply);
   }
 
   function escapeHtml(str) {
@@ -1340,6 +1351,9 @@
         hidePreview();
         closeHistoryWindow();
       }
+      if (typeof syncScrollListener === "function") {
+        syncScrollListener();
+      }
     }
 
     // --- Voyage-style History Window ---
@@ -1418,6 +1432,9 @@
       searchInput.value = "";
       renderHistoryList("");
       updateHistoryWindowPosition();
+      if (typeof syncScrollListener === "function") {
+        syncScrollListener();
+      }
       setTimeout(() => {
         searchInput.focus();
         const activeItemEl = historyList.querySelector(".cce-history-item.is-active");
@@ -1431,6 +1448,9 @@
       isHistoryWindowOpen = false;
       historyWindow.classList.add("is-hidden");
       searchInput.value = "";
+      if (typeof syncScrollListener === "function") {
+        syncScrollListener();
+      }
     }
 
     searchInput.addEventListener("input", () => {
@@ -1488,7 +1508,10 @@
       }
     });
 
+    let isScrollListening = false;
     let scrollThrottle = null;
+    let scrollEndTimer = null;
+
     function syncActiveFromViewport() {
       if ((!isHistoryActive && !isHistoryWindowOpen) || currentItems.length === 0) return;
       const viewportCenter = window.innerHeight / 2;
@@ -1520,13 +1543,47 @@
       }
     }
 
-    window.addEventListener("scroll", () => {
-      if (scrollThrottle) return;
-      scrollThrottle = requestAnimationFrame(() => {
-        scrollThrottle = null;
-        syncActiveFromViewport();
-      });
-    }, { passive: true });
+    function onWindowScroll() {
+      if (!scrollThrottle) {
+        scrollThrottle = requestAnimationFrame(() => {
+          scrollThrottle = null;
+          syncActiveFromViewport();
+        });
+      }
+
+      if (scrollEndTimer) clearTimeout(scrollEndTimer);
+      scrollEndTimer = setTimeout(() => {
+        scrollEndTimer = null;
+        if ((isHistoryActive || isHistoryWindowOpen) && navigatorBackend && typeof navigatorBackend.scanAndMergeDomPrompts === "function") {
+          const changed = navigatorBackend.scanAndMergeDomPrompts(document);
+          if (changed) {
+            currentItems = navigatorBackend.getState().items || [];
+            if (isHistoryActive) renderDots(currentItems);
+            if (isHistoryWindowOpen) renderHistoryList(searchInput.value);
+            syncActiveFromViewport();
+          }
+        }
+      }, 250);
+    }
+
+    function syncScrollListener() {
+      const needed = isHistoryActive || isHistoryWindowOpen;
+      if (needed && !isScrollListening) {
+        window.addEventListener("scroll", onWindowScroll, { passive: true });
+        isScrollListening = true;
+      } else if (!needed && isScrollListening) {
+        window.removeEventListener("scroll", onWindowScroll);
+        isScrollListening = false;
+        if (scrollThrottle) {
+          cancelAnimationFrame(scrollThrottle);
+          scrollThrottle = null;
+        }
+        if (scrollEndTimer) {
+          clearTimeout(scrollEndTimer);
+          scrollEndTimer = null;
+        }
+      }
+    }
 
     dotHistory = {
       root,
@@ -1546,6 +1603,7 @@
           setHistoryActive(false);
         }
         closeHistoryWindow();
+        syncScrollListener();
       }
     };
 
@@ -1580,7 +1638,7 @@
         return true;
       }
       if (message.type === "RESCAN_CURRENT") {
-        requestRescan();
+        requestRescan({ allowFallback: true });
         sendResponse(status());
         return false;
       }
@@ -1615,9 +1673,6 @@
   }
 
   injectObserver();
-  // If the MAIN-world declaration ran before this isolated listener, ask it
-  // to replay its bounded in-memory candidate cache after the listener exists.
-  window.setTimeout(requestRescan, 0);
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
       injectObserver();
@@ -1625,7 +1680,8 @@
     }, { once: true });
   }
   else buildUI();
-  window.setInterval(() => {
+
+  function checkConversationChange() {
     const nextId = currentConversationId();
     if (nextId !== currentId) {
       currentId = nextId;
@@ -1638,5 +1694,25 @@
       lastError = "";
       updatePanel();
     }
-  }, 750);
+  }
+
+  window.addEventListener("popstate", checkConversationChange);
+  if (window.history) {
+    const origPushState = window.history.pushState;
+    const origReplaceState = window.history.replaceState;
+    if (typeof origPushState === "function") {
+      window.history.pushState = function () {
+        const ret = origPushState.apply(this, arguments);
+        checkConversationChange();
+        return ret;
+      };
+    }
+    if (typeof origReplaceState === "function") {
+      window.history.replaceState = function () {
+        const ret = origReplaceState.apply(this, arguments);
+        checkConversationChange();
+        return ret;
+      };
+    }
+  }
 })();

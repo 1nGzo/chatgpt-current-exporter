@@ -87,12 +87,17 @@
     }
   }
 
+  let publishStatusTimer = null;
   function publishStatus() {
-    window.postMessage({ source: SOURCE, type: "observer-status", diagnostics: {
-      ...diagnostics,
-      lastDetectedKeys: diagnostics.lastDetectedKeys.slice(),
-      lastSchema: { ...diagnostics.lastSchema }
-    } }, "*");
+    if (publishStatusTimer) return;
+    publishStatusTimer = setTimeout(() => {
+      publishStatusTimer = null;
+      window.postMessage({ source: SOURCE, type: "observer-status", diagnostics: {
+        ...diagnostics,
+        lastDetectedKeys: diagnostics.lastDetectedKeys.slice(),
+        lastSchema: { ...diagnostics.lastSchema }
+      } }, "*");
+    }, 50);
   }
 
   function safeKeys(value) {
@@ -353,13 +358,26 @@
     return typeof contentType === "string" && (contentType.includes("text/event-stream") || contentType.includes("ndjson"));
   }
 
+  function isLikelyConversationUrl(url) {
+    if (!url) return false;
+    try {
+      const str = typeof url === "string" ? url : url && url.url ? url.url : String(url);
+      return str.includes("/backend-api/conversation") || str.includes("/backend-api/conversations");
+    } catch (_) {
+      return false;
+    }
+  }
+
   if (typeof window.fetch === "function") {
     originalFetch = window.fetch;
     diagnostics.fetchHooked = true;
     window.fetch = function () {
+      const targetUrl = arguments[0];
+      if (!isLikelyConversationUrl(targetUrl)) {
+        return originalFetch.apply(this, arguments);
+      }
       captureAuthHeader(arguments[0], arguments[1]);
       diagnostics.fetchObserved += 1;
-      publishStatus();
       return originalFetch.apply(this, arguments).then(function (response) {
         try {
           const contentType = response.headers && response.headers.get("content-type");
@@ -370,10 +388,6 @@
               diagnostics.jsonParseErrors += 1;
               publishStatus();
             });
-          } else if (isStreamContentType(contentType)) {
-            diagnostics.streamResponses += 1;
-            publishStatus();
-            response.clone().text().then((text) => observeStreamText(text, "fetch-stream", contentType, responsePath)).catch(() => {});
           }
         } catch (_) {
           // Observation must never alter the site's request result.
@@ -397,8 +411,10 @@
       return originalOpen.apply(this, arguments);
     };
     prototype.send = function () {
+      if (!isLikelyConversationUrl(this.__CCE_REQUEST_URL__)) {
+        return originalSend.apply(this, arguments);
+      }
       diagnostics.xhrObserved += 1;
-      publishStatus();
       this.addEventListener("load", function () {
         try {
           if (this.status < 200 || this.status >= 300) return;
@@ -407,9 +423,6 @@
           diagnostics.lastContentType = String(contentType);
           if (this.responseType === "json") {
             observePayload(this.response, "xhr", contentType, responsePath);
-          } else if (isStreamContentType(contentType)) {
-            diagnostics.streamResponses += 1;
-            observeStreamText(this.responseText, "xhr-stream", contentType, responsePath);
           } else if (isJsonContentType(contentType) || !contentType) {
             observeJsonText(this.responseText, "xhr", contentType, responsePath);
           }
@@ -422,45 +435,8 @@
     };
   }
 
-  function observeWebSocketData(data) {
-    diagnostics.webSocketMessages += 1;
-    const responsePath = "(WebSocket)";
-    if (typeof data === "string") {
-      try {
-        observePayload(JSON.parse(data), "websocket", "", responsePath);
-      } catch (_) {
-        observeStreamText(data, "websocket-stream", "", responsePath);
-      }
-      publishStatus();
-      return;
-    }
-    if (data && typeof data.text === "function") {
-      data.text().then((text) => observeWebSocketData(text)).catch(() => {});
-      return;
-    }
-    if (data instanceof ArrayBuffer && typeof TextDecoder === "function") {
-      observeWebSocketData(new TextDecoder().decode(data));
-    }
-  }
-
-  if (typeof window.WebSocket === "function") {
-    const OriginalWebSocket = window.WebSocket;
-    diagnostics.webSocketHooked = true;
-    const observeSocket = (socket) => {
-      diagnostics.webSocketObserved += 1;
-      socket.addEventListener("message", (event) => observeWebSocketData(event.data));
-      publishStatus();
-      return socket;
-    };
-    window.WebSocket = new Proxy(OriginalWebSocket, {
-      construct(target, args, newTarget) {
-        return observeSocket(Reflect.construct(target, args, newTarget));
-      },
-      apply(target, thisArg, args) {
-        return observeSocket(Reflect.apply(target, thisArg, args));
-      }
-    });
-  }
+  // Passive History trim: WebSocket interception disabled to prevent streaming overhead
+  diagnostics.webSocketHooked = false;
 
   function fallbackConfig() {
     const config = globalThis.CCEFallbackConfig;
@@ -958,8 +934,10 @@
       }
       // A rescan is an explicit request to refresh the current conversation.
       // If the page response was already captured, prefer that original payload;
-      // otherwise try the verified adapter.
-      attemptVerifiedFallback();
+      // otherwise try the verified adapter only when explicitly allowed.
+      if (event.data && event.data.allowFallback) {
+        attemptVerifiedFallback();
+      }
       return;
     }
 

@@ -728,6 +728,18 @@
       return { ok: false, reason: signal.reason || "aborted" };
     }
 
+    // Default Local Mode: direct DOM only. Guaranteed Seek (virtualizer & progressive seek)
+    // is only activated on explicit request.
+    const isGuaranteed = Boolean(
+      options.mode === "guaranteed" ||
+      options.guaranteed === true ||
+      options.scrollContainer ||
+      (options.requestVirtualizer && options.mode !== "local")
+    );
+    if (!isGuaranteed) {
+      return { ok: false, reason: "target_not_mounted" };
+    }
+
     const targetIndex = Number.isFinite(target.targetIndex)
       ? target.targetIndex
       : Number.isFinite(target.index)
@@ -986,10 +998,10 @@
     }
 
     /**
-     * Lazy initialization:
+     * Passive Local Mode initialization:
      * 1. Immediate local DOM prompt index.
-     * 2. Background cursor pagination.
-     * 3. Complete index update.
+     * 2. If basePayload exists, extract active path prompts from it.
+     * 3. Merge by messageId and mark ready (NO background API pagination).
      */
     async function init(conversationId, basePayload, options = {}) {
       const activeId = conversationId || state.conversationId;
@@ -997,37 +1009,65 @@
         resetForConversation(activeId);
       }
 
-      // If already ready and complete for current conversation, reuse cache
-      if (state.status === "ready" && !state.isPartial && state.items.length > 0) {
+      // If already ready for current conversation and has items, reuse
+      if (state.status === "ready" && state.items.length > 0) {
         return getState();
       }
 
       // 1. Immediate local DOM prompt index
       const localItems = buildLocalPromptIndexFromDom(options.document || root.document);
+
+      // 2. If basePayload is provided, inspect it for active path prompt items
+      let payloadItems = [];
+      if (basePayload) {
+        try {
+          const converter = deps.converter || root.CCEConversationConverter;
+          if (converter && typeof converter.inspect === "function") {
+            const document = converter.inspect(basePayload);
+            payloadItems = buildPromptIndexFromDocument(document);
+          }
+        } catch (_) {}
+      }
+
+      // 3. Merge: if payloadItems exists, match DOM nodes into it; otherwise use localItems
+      let mergedItems = [];
+      if (payloadItems.length > 0) {
+        const nodeMap = new Map();
+        localItems.forEach((it) => {
+          if (it.node && it.messageId) nodeMap.set(it.messageId, it.node);
+        });
+        payloadItems.forEach((it) => {
+          if (nodeMap.has(it.messageId)) {
+            it.node = nodeMap.get(it.messageId);
+            it.isDomNode = true;
+          }
+        });
+        mergedItems = payloadItems;
+      } else {
+        mergedItems = localItems;
+      }
+
       state = {
-        status: "loading",
+        status: "ready",
         conversationId: activeId,
-        items: localItems,
+        items: mergedItems,
         isPartial: true,
         error: null
       };
       notify();
 
-      // 2. Background cursor pagination
-      if (basePayload) {
+      // Only perform background cursor pagination if explicitly opted-in via options.paginate === true
+      if (options.paginate && basePayload) {
         try {
           const document = await loadFullConversationHistory(activeId, basePayload, { ...deps, ...options });
           const fullItems = buildPromptIndexFromDocument(document);
-
-          // Preserve any live DOM node references already found in local items
           const nodeMap = new Map();
-          localItems.forEach((it) => {
+          mergedItems.forEach((it) => {
             if (it.node && it.messageId) nodeMap.set(it.messageId, it.node);
           });
           fullItems.forEach((it) => {
             if (nodeMap.has(it.messageId)) it.node = nodeMap.get(it.messageId);
           });
-
           state = {
             status: "ready",
             conversationId: activeId,
@@ -1037,18 +1077,57 @@
           };
           notify();
         } catch (error) {
-          state = {
-            status: localItems.length > 0 ? "ready" : "error",
-            conversationId: activeId,
-            items: localItems,
-            isPartial: true,
-            error: error?.message || String(error)
-          };
-          notify();
+          // Keep passive items on error
         }
       }
 
       return getState();
+    }
+
+    /**
+     * Incremental scroll-end scanner:
+     * When user manually scrolls up and ChatGPT loads earlier messages in the DOM,
+     * detect newly mounted user prompts and merge into state.items by messageId.
+     */
+    function scanAndMergeDomPrompts(doc = root.document) {
+      const newlySeen = buildLocalPromptIndexFromDom(doc);
+      if (!newlySeen.length) return false;
+
+      const existingById = new Map();
+      state.items.forEach((it) => {
+        if (it.messageId) existingById.set(it.messageId, it);
+      });
+
+      let changed = false;
+      const unindexed = [];
+
+      newlySeen.forEach((item) => {
+        if (existingById.has(item.messageId)) {
+          const existing = existingById.get(item.messageId);
+          if (item.node && existing.node !== item.node) {
+            existing.node = item.node;
+            existing.isDomNode = true;
+          }
+        } else {
+          unindexed.push(item);
+          changed = true;
+        }
+      });
+
+      if (!changed) return false;
+
+      // Newly revealed items from scrolling up are earlier in conversation order
+      const combined = [...unindexed, ...state.items];
+      combined.forEach((item, idx) => {
+        item.userOrder = idx + 1;
+      });
+
+      state = {
+        ...state,
+        items: combined
+      };
+      notify();
+      return true;
     }
 
     return {
@@ -1056,6 +1135,7 @@
       subscribe,
       init,
       open: init,
+      scanAndMergeDomPrompts,
       resetForConversation,
       cancelActiveSeek,
       jumpToPrompt: (target, opt = {}) => {
@@ -1083,6 +1163,7 @@
         }
 
         const combinedOptions = {
+          mode: "local",
           ...deps,
           promptIndex: state.items,
           totalMessages: state.items.length * 2,
@@ -1100,6 +1181,9 @@
         });
 
         return promise;
+      },
+      seekGuaranteed: (target, opt = {}) => {
+        return jumpToPrompt(target, { mode: "guaranteed", guaranteed: true, ...opt });
       },
       buildLocalPromptIndexFromDom,
       buildPromptIndexFromDocument
