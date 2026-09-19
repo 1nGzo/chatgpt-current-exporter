@@ -8,6 +8,33 @@
   const platform = platformCore && typeof platformCore.detectPlatform === "function"
     ? platformCore.detectPlatform(window.location.href)
     : "chatgpt";
+  // Route changes originate in MAIN world. Synchronous notification clears the
+  // outgoing DOM before React can mount the next conversation; postMessage also
+  // supports startup handshakes and carries a monotonic identity epoch.
+  let routeConversationId = currentPageConversationId();
+  let routeEpoch = 0;
+  function publishRoute() {
+    const conversationId = currentPageConversationId();
+    if (conversationId !== routeConversationId) {
+      routeConversationId = conversationId;
+      routeEpoch += 1;
+    }
+    const message = { source: SOURCE, type: "conversation-route",
+      conversationId, epoch: routeEpoch };
+    window.dispatchEvent(new CustomEvent("cce-conversation-route", { detail: JSON.stringify(message) }));
+    window.postMessage(message, "*");
+  }
+  for (const method of ["pushState", "replaceState"]) {
+    const original = window.history && window.history[method];
+    if (typeof original !== "function") continue;
+    window.history[method] = function () {
+      const result = original.apply(this, arguments);
+      publishRoute();
+      return result;
+    };
+  }
+  window.addEventListener("popstate", publishRoute);
+
   const diagnostics = {
     platform,
     platformLabel: platformCore && typeof platformCore.definition === "function" ? platformCore.definition(platform).label : platform,
@@ -906,6 +933,11 @@
   window.addEventListener("message", async (event) => {
     if (event.source !== window || !event.data || event.data.source !== SOURCE) return;
     const type = event.data.type;
+
+    if (type === "navigator-route-request") {
+      publishRoute();
+      return;
+    }
 
     if (type === "rescan") {
       publishStatus();

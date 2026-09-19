@@ -1082,7 +1082,6 @@
 
     let isHistoryActive = false;
     let isHistoryWindowOpen = false;
-    let initializedForCurrent = false;
     let currentItems = [];
     let activeIndex = -1;
 
@@ -1315,7 +1314,7 @@
           node.classList.add("is-seeking");
           try {
             const res = await navigatorBackend.jumpToPrompt(item);
-            if (res && res.ok) {
+            if (res && res.ok && item.epoch === navigatorBackend.getState().epoch) {
               setActiveDot(index);
             }
           } finally {
@@ -1342,10 +1341,7 @@
         quickExport.setHistoryActive(isHistoryActive);
       }
       if (isHistoryActive) {
-        if (!initializedForCurrent) {
-          initializedForCurrent = true;
-          globalThis.CCEHistoryNavigator.open();
-        }
+        globalThis.CCEHistoryNavigator.open();
         renderDots(navigatorBackend.getState().items);
       } else {
         hidePreview();
@@ -1406,7 +1402,7 @@
           closeHistoryWindow();
           try {
             const res = await navigatorBackend.jumpToPrompt(item);
-            if (res && res.ok) {
+            if (res && res.ok && item.epoch === navigatorBackend.getState().epoch) {
               setActiveDot(itemIdx);
             }
           } finally {
@@ -1424,10 +1420,7 @@
       isHistoryWindowOpen = true;
       historyWindow.classList.remove("is-hidden");
       updateHistoryWindowPosition();
-      if (!initializedForCurrent) {
-        initializedForCurrent = true;
-        globalThis.CCEHistoryNavigator.open();
-      }
+      globalThis.CCEHistoryNavigator.open();
       currentItems = navigatorBackend.getState().items || [];
       searchInput.value = "";
       renderHistoryList("");
@@ -1511,6 +1504,19 @@
     let isScrollListening = false;
     let scrollThrottle = null;
     let scrollEndTimer = null;
+    let localObserver = null;
+    let localScanTimer = null;
+
+    function scheduleLocalScan() {
+      if (localScanTimer) return;
+      const epoch = navigatorBackend.getState().epoch;
+      localScanTimer = setTimeout(() => {
+        localScanTimer = null;
+        if (isHistoryActive || isHistoryWindowOpen) {
+          navigatorBackend.scanAndMergeDomPrompts(document, epoch);
+        }
+      }, 100);
+    }
 
     function syncActiveFromViewport() {
       if ((!isHistoryActive && !isHistoryWindowOpen) || currentItems.length === 0) return;
@@ -1555,13 +1561,8 @@
       scrollEndTimer = setTimeout(() => {
         scrollEndTimer = null;
         if ((isHistoryActive || isHistoryWindowOpen) && navigatorBackend && typeof navigatorBackend.scanAndMergeDomPrompts === "function") {
-          const changed = navigatorBackend.scanAndMergeDomPrompts(document);
-          if (changed) {
-            currentItems = navigatorBackend.getState().items || [];
-            if (isHistoryActive) renderDots(currentItems);
-            if (isHistoryWindowOpen) renderHistoryList(searchInput.value);
-            syncActiveFromViewport();
-          }
+          navigatorBackend.scanAndMergeDomPrompts(document);
+          syncActiveFromViewport();
         }
       }, 250);
     }
@@ -1569,10 +1570,18 @@
     function syncScrollListener() {
       const needed = isHistoryActive || isHistoryWindowOpen;
       if (needed && !isScrollListening) {
-        window.addEventListener("scroll", onWindowScroll, { passive: true });
+        window.addEventListener("scroll", onWindowScroll, { passive: true, capture: true });
+        localObserver = new MutationObserver(scheduleLocalScan);
+        localObserver.observe(document.documentElement, { childList: true, subtree: true,
+          characterData: true, attributes: true,
+          attributeFilter: ["data-message-id", "data-turn-id", "data-message-author-role", "data-testid"] });
         isScrollListening = true;
       } else if (!needed && isScrollListening) {
-        window.removeEventListener("scroll", onWindowScroll);
+        window.removeEventListener("scroll", onWindowScroll, true);
+        if (localObserver) localObserver.disconnect();
+        localObserver = null;
+        if (localScanTimer) clearTimeout(localScanTimer);
+        localScanTimer = null;
         isScrollListening = false;
         if (scrollThrottle) {
           cancelAnimationFrame(scrollThrottle);
@@ -1596,7 +1605,6 @@
       openWindow: openHistoryWindow,
       closeWindow: closeHistoryWindow,
       reset: () => {
-        initializedForCurrent = false;
         currentItems = [];
         activeIndex = -1;
         if (isHistoryActive) {
@@ -1621,6 +1629,7 @@
 
   window.addEventListener("message", (event) => {
     if (event.source !== window || !event.data || event.data.source !== SOURCE) return;
+    if (event.data.type === "conversation-route") acceptConversationRoute(event.data);
     if (event.data.type === "observer-status") mergeObserverDiagnostics(event.data.diagnostics);
     if (event.data.type === "conversation-response") capture(event.data.payload);
     if (event.data.type === "conversation-message-page") captureMessagePage(event.data.conversationId, event.data.payload, event.data.pageKey);
@@ -1661,14 +1670,20 @@
 
   const navigatorBackend =
     platformId === "chatgpt" && globalThis.CCEChatGPTNavigator && typeof globalThis.CCEChatGPTNavigator.createChatGPTNavigatorBackend === "function"
-      ? globalThis.CCEChatGPTNavigator.createChatGPTNavigatorBackend({ converter })
+      ? globalThis.CCEChatGPTNavigator.createChatGPTNavigatorBackend({ getConversationId: currentConversationId })
       : null;
 
   if (navigatorBackend) {
     globalThis.CCEHistoryNavigator = {
       ...navigatorBackend,
-      open: (opt) => navigatorBackend.open(currentId, basePayloads.get(currentId), opt),
-      init: (opt) => navigatorBackend.init(currentId, basePayloads.get(currentId), opt)
+      open: (opt) => {
+        checkConversationChange();
+        return navigatorBackend.open(currentId, null, opt);
+      },
+      init: (opt) => {
+        checkConversationChange();
+        return navigatorBackend.init(currentId, null, opt);
+      }
     };
   }
 
@@ -1681,38 +1696,35 @@
   }
   else buildUI();
 
-  function checkConversationChange() {
+  let lastRouteEpoch = -1;
+
+  function checkConversationChange(options = {}) {
     const nextId = currentConversationId();
-    if (nextId !== currentId) {
+    if (nextId !== currentId || options.force) {
+      const previousId = currentId;
       currentId = nextId;
       if (navigatorBackend) {
-        navigatorBackend.resetForConversation(nextId);
-        if (dotHistory && typeof dotHistory.reset === "function") {
-          dotHistory.reset();
-        }
+        navigatorBackend.resetForConversation(nextId, { force: options.force,
+          preserveMounted: !previousId && Boolean(nextId),
+          discardMounted: Boolean(previousId && options.synchronous) });
+        if (dotHistory && typeof dotHistory.reset === "function") dotHistory.reset();
       }
       lastError = "";
       updatePanel();
     }
   }
 
-  window.addEventListener("popstate", checkConversationChange);
-  if (window.history) {
-    const origPushState = window.history.pushState;
-    const origReplaceState = window.history.replaceState;
-    if (typeof origPushState === "function") {
-      window.history.pushState = function () {
-        const ret = origPushState.apply(this, arguments);
-        checkConversationChange();
-        return ret;
-      };
-    }
-    if (typeof origReplaceState === "function") {
-      window.history.replaceState = function () {
-        const ret = origReplaceState.apply(this, arguments);
-        checkConversationChange();
-        return ret;
-      };
-    }
+  function acceptConversationRoute(message, synchronous = false) {
+    if (!Number.isSafeInteger(message.epoch) || message.epoch <= lastRouteEpoch ||
+        message.conversationId !== currentConversationId()) return;
+    const force = lastRouteEpoch >= 0 && message.epoch > lastRouteEpoch;
+    lastRouteEpoch = message.epoch;
+    checkConversationChange({ force, synchronous });
   }
+
+  window.addEventListener("cce-conversation-route", (event) => {
+    try { acceptConversationRoute(JSON.parse(event.detail), true); } catch (_) {}
+  });
+  window.addEventListener("popstate", checkConversationChange);
+  window.postMessage({ source: SOURCE, type: "navigator-route-request" }, "*");
 })();

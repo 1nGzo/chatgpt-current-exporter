@@ -9,6 +9,7 @@ class MockElement {
   constructor(tagName, attributes = {}, text = "") {
     this.tagName = (tagName || "div").toUpperCase();
     this.attributes = { ...attributes };
+    this.dataset = {};
     this._textContent = text;
     this.children = [];
     this.parentElement = null;
@@ -214,6 +215,208 @@ async function runPassiveHistoryTests() {
     const changedAgain = backend.scanAndMergeDomPrompts(testDoc);
     assert.equal(changedAgain, false, "Must return false and do no work when no new prompts exist");
     console.log("PASS: Test 2 passed");
+  }
+
+  // DOM-only state invariants: stale API paths, append, edits, reorder, remount, empty.
+  {
+    const testDoc = new MockDocument();
+    const makePrompt = (id, text) => {
+      const article = new MockElement("article", { "data-message-id": id });
+      article.appendChild(new MockElement("div", { "data-message-author-role": "user" }, text));
+      return article;
+    };
+    const first = makePrompt("first", "First");
+    testDoc.body.appendChild(first);
+    let inspectCalls = 0;
+    let fetchCalls = 0;
+    const backend = navigator.createChatGPTNavigatorBackend({
+      converter: { inspect() {
+        inspectCalls++;
+        return { messages: [{ role: "user", messageId: "stale", body: "Old snapshot" }] };
+      } },
+      fetchPage() { fetchCalls++; throw new Error("History must not paginate"); }
+    });
+    await backend.open("local", { conversation_id: "old", messages: [{ id: "stale" }] },
+      { document: testDoc, paginate: true });
+    assert.deepEqual(Array.from(backend.getState().items, it => it.messageId), ["first"]);
+    assert.equal(inspectCalls, 0, "Captured active path must never enter local initialization");
+    assert.equal(fetchCalls, 0);
+
+    const middle = makePrompt("middle", "Middle");
+    const last = makePrompt("last", "Last");
+    testDoc.body.appendChild(middle);
+    testDoc.body.appendChild(last);
+    backend.scanAndMergeDomPrompts(testDoc);
+    assert.deepEqual(Array.from(backend.getState().items, it => it.messageId), ["first", "middle", "last"]);
+    assert.equal(backend.getState().items.at(-1).previewText, "Last");
+    for (const item of backend.getState().items) {
+      const result = await backend.jumpToPrompt(item, { document: testDoc });
+      assert.equal(result.ok, true);
+      assert.equal(result.method, "direct");
+      assert.equal(result.node, item.node);
+      assert.equal(item.node.scrollIntoViewCalled, true);
+    }
+
+    middle.children[0]._textContent = "Edited middle";
+    middle.setAttribute("data-message-id", "middle-edited");
+    testDoc.body.children = [last, middle, first];
+    assert.equal(backend.scanAndMergeDomPrompts(testDoc), true);
+    assert.deepEqual(Array.from(backend.getState().items, it => [it.messageId, it.previewText, it.userOrder]),
+      [["last", "Last", 1], ["middle-edited", "Edited middle", 2], ["first", "First", 3]]);
+    const replacement = makePrompt("first", "Updated first");
+    first.isConnected = false;
+    testDoc.body.children = [replacement];
+    replacement.parentElement = testDoc.body;
+    // Reopen must refresh even when the backend is already ready.
+    await backend.open("local", null, { document: testDoc });
+    assert.equal(backend.getState().items.length, 1);
+    assert.equal(backend.getState().items[0].node, replacement);
+    assert.equal(backend.getState().items[0].previewText, "Updated first");
+    testDoc.body.children = [];
+    assert.equal(backend.scanAndMergeDomPrompts(testDoc), true);
+    assert.equal(backend.getState().items.length, 0);
+    console.log("PASS: DOM-only index tracks append/edit/reorder/remount/empty and direct jumps");
+  }
+
+  // Epoch isolation, including retained outgoing DOM and delayed work after A -> B -> A.
+  {
+    const testDoc = new MockDocument();
+    let conversationId = "A";
+    const backend = navigator.createChatGPTNavigatorBackend({ getConversationId: () => conversationId });
+    const article = new MockElement("article", { "data-message-id": "a" });
+    article.appendChild(new MockElement("div", { "data-message-author-role": "user" }, "A prompt"));
+    testDoc.body.appendChild(article);
+    await backend.open("A", null, { document: testDoc });
+    const old = backend.getState();
+    conversationId = "B";
+    assert.equal(backend.scanAndMergeDomPrompts(testDoc, old.epoch), false, "URL mismatch blocks work before route delivery");
+    backend.resetForConversation("B", { discardMounted: true, document: testDoc });
+    await backend.open("B", null, { document: testDoc });
+    assert.equal(backend.getState().items.length, 0, "Outgoing DOM cannot become B's index");
+    assert.equal((await backend.jumpToPrompt(old.items[0], { document: testDoc })).reason, "conversation_changed");
+    await backend.open("A", { messages: [] }, { document: testDoc });
+    assert.equal(backend.getState().conversationId, "B", "Late A init must not restore A");
+    article.setAttribute("data-message-id", "b");
+    article.children[0]._textContent = "B prompt";
+    backend.scanAndMergeDomPrompts(testDoc);
+    assert.equal(backend.getState().items[0].messageId, "b", "Recycled node with new identity can enter B");
+    conversationId = "A";
+    backend.resetForConversation("A");
+    assert.equal(backend.scanAndMergeDomPrompts(testDoc, old.epoch), false, "Same conversation ID cannot revive an old epoch");
+    await backend.open("A", null, { document: testDoc, epoch: old.epoch });
+    assert.equal(backend.getState().status, "idle", "Late same-ID init must not publish");
+    console.log("PASS: Conversation epoch rejects delayed scans, opens and clicks");
+  }
+
+  // Execute both real scripts in separate worlds; only DOM events/messages are shared.
+  {
+    const testDoc = new MockDocument();
+    testDoc.readyState = "loading"; // Route/backend integration; UI rendering is not simulated here.
+    testDoc.addEventListener = () => {};
+    testDoc.createElement = tag => new MockElement(tag);
+    testDoc.documentElement.appendChild(new MockElement("script", { "data-cce-observer": "true" }));
+    const location = { href: "https://chatgpt.com/c/A" };
+    const worlds = [];
+    const queued = [];
+    const timers = new Map();
+    let timerId = 0;
+    function makeWorld() {
+      const listeners = new Map();
+      const world = { console, URL, URLSearchParams, document: testDoc, location,
+        HTMLElement: MockElement, AbortController,
+        chrome: { runtime: { getURL: path => `chrome-extension://test/${path}` } },
+        CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
+        setTimeout(fn) { timers.set(++timerId, fn); return timerId; },
+        clearTimeout(id) { timers.delete(id); },
+        addEventListener(type, fn) {
+          if (!listeners.has(type)) listeners.set(type, []);
+          listeners.get(type).push(fn);
+        },
+        dispatchEvent(event) { for (const other of worlds) other.deliver(event); },
+        postMessage(data) { queued.push(data); },
+        history: {
+          pushState(_state, _title, url) { location.href = new URL(url, location.href).href; return "native-result"; },
+          replaceState(_state, _title, url) { location.href = new URL(url, location.href).href; }
+        }
+      };
+      world.window = world;
+      world.globalThis = world;
+      vm.createContext(world);
+      // event.source must be the receiver's Window proxy, as in the real bridge.
+      const proxy = vm.runInContext("window", world);
+      world.deliver = event => {
+        const received = event.type === "message" ? { ...event, source: proxy } : event;
+        for (const fn of listeners.get(event.type) || []) fn(received);
+      };
+      worlds.push(world);
+      return world;
+    }
+    const main = makeWorld();
+    const isolated = makeWorld();
+    const isolatedPush = isolated.history.pushState;
+    vm.runInContext(fs.readFileSync("extension/injected.js", "utf8"), main);
+    vm.runInContext(fs.readFileSync("extension/adapters/chatgpt-navigator.js", "utf8"), isolated);
+    vm.runInContext(fs.readFileSync("extension/content.js", "utf8"), isolated);
+    function flushMessages() {
+      while (queued.length) {
+        const data = queued.shift();
+        for (const world of worlds) world.deliver({ type: "message", data });
+      }
+    }
+    flushMessages();
+    assert.equal(isolated.history.pushState, isolatedPush, "ISOLATED must not wrap route methods");
+    const nav = isolated.CCEHistoryNavigator;
+    const a = new MockElement("article", { "data-message-id": "a" });
+    a.appendChild(new MockElement("div", { "data-message-author-role": "user" }, "A prompt"));
+    testDoc.body.appendChild(a);
+    await nav.open();
+    const old = nav.getState();
+    assert.equal(old.items[0].messageId, "a");
+    assert.equal(main.history.pushState({}, "", "/c/B"), "native-result");
+    assert.equal(nav.getState().conversationId, "B", "MAIN hook must synchronously reset ISOLATED");
+    assert(nav.getState().epoch > old.epoch);
+    await nav.open();
+    assert.equal(nav.getState().items.length, 0, "Still mounted A DOM must not enter B");
+    const b = new MockElement("article", { "data-message-id": "b" });
+    b.appendChild(new MockElement("div", { "data-message-author-role": "user" }, "B prompt"));
+    a.isConnected = false;
+    testDoc.body.children = [b];
+    b.parentElement = testDoc.body;
+    await nav.open();
+    assert.equal(nav.getState().items[0].messageId, "b");
+    const beforeFlush = nav.getState().epoch;
+    flushMessages();
+    assert.equal(nav.getState().epoch, beforeFlush, "Duplicate asynchronous route notification must not reset B");
+    main.history.replaceState({}, "", "/c/A");
+    assert.equal(nav.getState().conversationId, "A");
+    assert.equal(nav.scanAndMergeDomPrompts(testDoc, old.epoch), false);
+    assert.equal((await nav.jumpToPrompt(old.items[0])).reason, "conversation_changed");
+    // Late B notification cannot reset the current A epoch.
+    isolated.deliver({ type: "message", data: { source: "chatgpt-current-exporter",
+      type: "conversation-route", conversationId: "B", epoch: 1 } });
+    assert.equal(nav.getState().conversationId, "A");
+    location.href = "https://chatgpt.com/c/C";
+    main.dispatchEvent({ type: "popstate" });
+    assert.equal(nav.getState().conversationId, "C");
+    flushMessages();
+    // A draft keeps its live DOM when ChatGPT assigns the new conversation ID.
+    b.setAttribute("data-message-id", "c");
+    await nav.open();
+    main.history.pushState({}, "", "/");
+    const draft = new MockElement("article");
+    draft.appendChild(new MockElement("div", { "data-message-author-role": "user" }, "Draft prompt"));
+    testDoc.body.appendChild(draft);
+    await nav.open();
+    assert.equal(nav.getState().items.length, 1, "Previous conversation DOM is still excluded");
+    assert.equal(nav.getState().items[0].messageId, "", "Do not invent an API message ID for local DOM");
+    main.history.replaceState({}, "", "/c/new");
+    draft.setAttribute("data-message-id", "new-user");
+    await nav.open();
+    assert.equal(nav.getState().items.length, 1, "Draft adoption must not revive outgoing DOM");
+    assert.equal(nav.getState().items[0].messageId, "new-user");
+    assert.equal((await nav.jumpToPrompt(nav.getState().items[0])).method, "direct");
+    flushMessages();
+    console.log("PASS: Separate MAIN/ISOLATED worlds route via pushState/replaceState/popstate with epoch deduplication");
   }
 
   // Test 3: Default Local Jump vs Guaranteed Seek

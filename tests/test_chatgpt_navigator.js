@@ -540,7 +540,11 @@ async function runTests() {
       messages: [{ id: "uA", author: { role: "user" }, content: { content_type: "text", parts: ["Conv A Prompt"] }, parent: null }]
     };
 
-    await backend.open("conv-A", baseA);
+    const testDoc = new MockDocument();
+    const article = new MockElement("article", { "data-message-id": "uA" });
+    article.appendChild(new MockElement("div", { "data-message-author-role": "user" }, "Conv A Prompt"));
+    testDoc.body.appendChild(article);
+    await backend.open("conv-A", baseA, { document: testDoc });
     assert.strictEqual(backend.getState().status, "ready");
     assert.strictEqual(backend.getState().conversationId, "conv-A");
     assert.strictEqual(backend.getState().items.length, 1);

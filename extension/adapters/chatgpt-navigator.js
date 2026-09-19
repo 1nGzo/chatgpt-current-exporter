@@ -204,8 +204,8 @@
       if (seenNodes.has(rootNode)) return;
       seenNodes.add(rootNode);
 
-      const messageId = getDomMessageId(rootNode) || `dom-user-${userOrder}`;
-      const fullText = extractNodeText(rootNode);
+      const messageId = getDomMessageId(candidate) || getDomMessageId(rootNode);
+      const fullText = extractNodeText(candidate);
       const previewText = truncatePreview(fullText);
 
       // Attempt to extract turn index from testid e.g. conversation-turn-3
@@ -945,6 +945,7 @@
     let state = {
       status: "idle", // "idle" | "loading" | "ready" | "error"
       conversationId: "",
+      epoch: 0,
       items: [],
       isPartial: true,
       error: null
@@ -983,12 +984,28 @@
       return () => listeners.delete(listener);
     }
 
-    function resetForConversation(nextConversationId) {
-      if (nextConversationId !== state.conversationId) {
+    // Outgoing DOM may remain mounted briefly after the URL changes.
+    let outgoingNodes = new WeakMap();
+
+    function resetForConversation(nextConversationId, options = {}) {
+      const nextId = nextConversationId || "";
+      if (nextId !== state.conversationId || options.force) {
         cancelActiveSeek("conversation_changed");
+        // Assigning an ID to a new draft keeps its DOM, while retaining any
+        // exclusion from the conversation that preceded the draft.
+        if (!options.preserveMounted) {
+          const outgoing = options.discardMounted
+            ? buildLocalPromptIndexFromDom(options.document || root.document)
+            : state.items;
+          outgoingNodes = new WeakMap();
+          outgoing.forEach((item) => {
+            if (item.node) outgoingNodes.set(item.node, item.messageId);
+          });
+        }
         state = {
           status: "idle",
-          conversationId: nextConversationId || "",
+          conversationId: nextId,
+          epoch: state.epoch + 1,
           items: [],
           isPartial: true,
           error: null
@@ -997,135 +1014,37 @@
       }
     }
 
-    /**
-     * Passive Local Mode initialization:
-     * 1. Immediate local DOM prompt index.
-     * 2. If basePayload exists, extract active path prompts from it.
-     * 3. Merge by messageId and mark ready (NO background API pagination).
-     */
-    async function init(conversationId, basePayload, options = {}) {
-      const activeId = conversationId || state.conversationId;
-      if (activeId !== state.conversationId) {
-        resetForConversation(activeId);
-      }
+    function isCurrent(epoch = state.epoch) {
+      return epoch === state.epoch && (!deps.getConversationId ||
+        (deps.getConversationId() || "") === state.conversationId);
+    }
 
-      // If already ready for current conversation and has items, reuse
-      if (state.status === "ready" && state.items.length > 0) {
-        return getState();
-      }
-
-      // 1. Immediate local DOM prompt index
-      const localItems = buildLocalPromptIndexFromDom(options.document || root.document);
-
-      // 2. If basePayload is provided, inspect it for active path prompt items
-      let payloadItems = [];
-      if (basePayload) {
-        try {
-          const converter = deps.converter || root.CCEConversationConverter;
-          if (converter && typeof converter.inspect === "function") {
-            const document = converter.inspect(basePayload);
-            payloadItems = buildPromptIndexFromDocument(document);
-          }
-        } catch (_) {}
-      }
-
-      // 3. Merge: if payloadItems exists, match DOM nodes into it; otherwise use localItems
-      let mergedItems = [];
-      if (payloadItems.length > 0) {
-        const nodeMap = new Map();
-        localItems.forEach((it) => {
-          if (it.node && it.messageId) nodeMap.set(it.messageId, it.node);
-        });
-        payloadItems.forEach((it) => {
-          if (nodeMap.has(it.messageId)) {
-            it.node = nodeMap.get(it.messageId);
-            it.isDomNode = true;
-          }
-        });
-        mergedItems = payloadItems;
-      } else {
-        mergedItems = localItems;
-      }
-
-      state = {
-        status: "ready",
-        conversationId: activeId,
-        items: mergedItems,
-        isPartial: true,
-        error: null
-      };
-      notify();
-
-      // Only perform background cursor pagination if explicitly opted-in via options.paginate === true
-      if (options.paginate && basePayload) {
-        try {
-          const document = await loadFullConversationHistory(activeId, basePayload, { ...deps, ...options });
-          const fullItems = buildPromptIndexFromDocument(document);
-          const nodeMap = new Map();
-          mergedItems.forEach((it) => {
-            if (it.node && it.messageId) nodeMap.set(it.messageId, it.node);
-          });
-          fullItems.forEach((it) => {
-            if (nodeMap.has(it.messageId)) it.node = nodeMap.get(it.messageId);
-          });
-          state = {
-            status: "ready",
-            conversationId: activeId,
-            items: fullItems,
-            isPartial: false,
-            error: null
-          };
-          notify();
-        } catch (error) {
-          // Keep passive items on error
-        }
-      }
-
+    // Keep the legacy argument slot for callers, but never consume API snapshots.
+    async function init(conversationId, _basePayload, options = {}) {
+      const activeId = conversationId || "";
+      if (options.epoch !== undefined && !isCurrent(options.epoch)) return getState();
+      if (deps.getConversationId && activeId !== (deps.getConversationId() || "")) return getState();
+      if (activeId !== state.conversationId) resetForConversation(activeId);
+      scanAndMergeDomPrompts(options.document || root.document, state.epoch);
       return getState();
     }
 
-    /**
-     * Incremental scroll-end scanner:
-     * When user manually scrolls up and ChatGPT loads earlier messages in the DOM,
-     * detect newly mounted user prompts and merge into state.items by messageId.
-     */
-    function scanAndMergeDomPrompts(doc = root.document) {
-      const newlySeen = buildLocalPromptIndexFromDom(doc);
-      if (!newlySeen.length) return false;
-
-      const existingById = new Map();
-      state.items.forEach((it) => {
-        if (it.messageId) existingById.set(it.messageId, it);
-      });
-
-      let changed = false;
-      const unindexed = [];
-
-      newlySeen.forEach((item) => {
-        if (existingById.has(item.messageId)) {
-          const existing = existingById.get(item.messageId);
-          if (item.node && existing.node !== item.node) {
-            existing.node = item.node;
-            existing.isDomNode = true;
-          }
-        } else {
-          unindexed.push(item);
-          changed = true;
-        }
-      });
-
+    // A single current mounted-DOM snapshot, never an append/prepend history cache.
+    function scanAndMergeDomPrompts(doc = root.document, epoch = state.epoch) {
+      if (!isCurrent(epoch)) return false;
+      const items = buildLocalPromptIndexFromDom(doc)
+        .filter((item) => !outgoingNodes.has(item.node) || outgoingNodes.get(item.node) !== item.messageId)
+        .map((item, index) => ({ ...item, userOrder: index + 1,
+          conversationId: state.conversationId, epoch }));
+      if (!isCurrent(epoch)) return false;
+      const changed = state.status !== "ready" || items.length !== state.items.length ||
+        items.some((item, index) => {
+          const old = state.items[index];
+          return !old || ["messageId", "previewText", "node", "userOrder", "targetIndex"]
+            .some((key) => item[key] !== old[key]);
+        });
       if (!changed) return false;
-
-      // Newly revealed items from scrolling up are earlier in conversation order
-      const combined = [...unindexed, ...state.items];
-      combined.forEach((item, idx) => {
-        item.userOrder = idx + 1;
-      });
-
-      state = {
-        ...state,
-        items: combined
-      };
+      state = { ...state, status: "ready", items, isPartial: true, error: null };
       notify();
       return true;
     }
@@ -1139,6 +1058,10 @@
       resetForConversation,
       cancelActiveSeek,
       jumpToPrompt: (target, opt = {}) => {
+        if (!isCurrent(target?.epoch) || (target?.conversationId !== undefined &&
+            target.conversationId !== state.conversationId)) {
+          return Promise.resolve({ ok: false, reason: "conversation_changed" });
+        }
         cancelActiveSeek("superseded");
         const AbortCtrl = root.AbortController || (typeof AbortController !== "undefined" ? AbortController : null);
         let controller = null;
