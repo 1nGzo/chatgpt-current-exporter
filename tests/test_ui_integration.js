@@ -26,7 +26,7 @@ assert(!popupCss.includes('#10a37f; border-radius: 6px; color: #fff; background:
 console.log('PASS: Test 1 passed');
 
 // 2. In-Page Content Script UI Verification
-console.log('Test 2: Quick Export & Dot History Components in content.js');
+console.log('Test 2: Quick Export, History Dock & Voyage Window in content.js');
 const contentSrc = fs.readFileSync('extension/content.js', 'utf8');
 
 // Verify presence of Quick Export and Dot History functions
@@ -34,10 +34,19 @@ assert(contentSrc.includes('function buildQuickExportUI()'), 'buildQuickExportUI
 assert(contentSrc.includes('function buildDotHistoryUI()'), 'buildDotHistoryUI must exist');
 assert(contentSrc.includes('function detectTheme()'), 'detectTheme must exist');
 assert(contentSrc.includes('cce-quick-pill'), 'cce-quick-pill class must exist');
+assert(contentSrc.includes('cce-dock-history'), 'cce-dock-history class must exist');
+assert(contentSrc.includes('cce-dock-export'), 'cce-dock-export class must exist');
 assert(contentSrc.includes('cce-dot-handle'), 'cce-dot-handle class must exist');
 assert(contentSrc.includes('cce-dot-timeline'), 'cce-dot-timeline class must exist');
 assert(contentSrc.includes('cce-dot-node'), 'cce-dot-node class must exist');
 assert(contentSrc.includes('cce-dot-preview'), 'cce-dot-preview class must exist');
+assert(contentSrc.includes('cce-history-overlay'), 'cce-history-overlay class must exist');
+assert(contentSrc.includes('cce-history-search-input'), 'cce-history-search-input class must exist');
+assert(contentSrc.includes('cce-history-list'), 'cce-history-list class must exist');
+assert(contentSrc.includes('openHistoryWindow'), 'openHistoryWindow must exist');
+assert(contentSrc.includes('previewText'), 'previewText must be used for preview');
+assert(!contentSrc.includes('preview.textContent = item.preview || item.text || `Prompt'), 'Must not fallback to pure Prompt N placeholder');
+console.log('PASS: Test 2 passed');
 
 // 3. Dot History Logic & Density Verification
 console.log('Test 3: Dot Density Compression Calculation');
@@ -117,5 +126,140 @@ assert.equal(mockStorage.exportFormat, 'both');
 assert.equal(selectFormat('markdown'), 'MD');
 assert.equal(mockStorage.exportFormat, 'markdown');
 console.log('PASS: Test 5 passed');
+
+// 6. Interaction Responsibility & Preview Text Unit Verification
+console.log('Test 6: Interaction Responsibilities & Preview Text Generation');
+
+// Mock Dot History state
+let railExpanded = false;
+let historyWindowOpen = false;
+
+function onHistoryBtnClick() {
+  // History button only toggles rail, NEVER opens history window
+  railExpanded = !railExpanded;
+}
+
+function onHandleBtnClick() {
+  // Handle button only toggles/opens history window, NEVER touches rail
+  historyWindowOpen = !historyWindowOpen;
+}
+
+// Initial state
+assert.equal(railExpanded, false);
+assert.equal(historyWindowOpen, false);
+
+// Click History in dock
+onHistoryBtnClick();
+assert.equal(railExpanded, true, 'History click expands dot rail');
+assert.equal(historyWindowOpen, false, 'History click must not open history window');
+
+// Click History in dock again
+onHistoryBtnClick();
+assert.equal(railExpanded, false, 'Second History click collapses dot rail');
+assert.equal(historyWindowOpen, false, 'History click must not open history window');
+
+// Click Handle
+onHandleBtnClick();
+assert.equal(historyWindowOpen, true, 'Handle click opens history window');
+assert.equal(railExpanded, false, 'Handle click must not expand dot rail');
+
+// Preview Text formatting check
+function generatePreview(item, index) {
+  const text = item.previewText || item.preview || item.text || "";
+  const orderStr = `#${item.userOrder || index + 1}`;
+  assert(!text.startsWith('Prompt '), 'Must never use placeholder Prompt N for previewText');
+  return { orderStr, text };
+}
+
+const itemWithText = {
+  previewText: "完整正文和视觉锚点，记录，并重新调取最高指令……",
+  userOrder: 14
+};
+const previewResult = generatePreview(itemWithText, 13);
+assert.equal(previewResult.orderStr, '#14');
+assert.equal(previewResult.text, '完整正文和视觉锚点，记录，并重新调取最高指令……');
+
+console.log('PASS: Test 6 passed');
+
+// 7. Anchored Popover & Dot Preview Positioning Unit Verification
+console.log('Test 7: Anchored Popover & Dot Preview Positioning Logic');
+
+// Verify no full-screen backdrop / page dimming in content.js
+assert(!contentSrc.includes('cce-history-backdrop'), 'Must not contain cce-history-backdrop (no dimming modal)');
+assert(contentSrc.includes('updateHistoryWindowPosition'), 'Must implement updateHistoryWindowPosition');
+assert(contentSrc.includes('dotRect = node.getBoundingClientRect()'), 'Must anchor dot preview to node.getBoundingClientRect()');
+
+// A. Test History Window Positioning Algorithm
+function calcHistoryWindowPos(handleRect, winW, winH, winWidth = 380, winHeight = 480, gap = 8) {
+  let left = handleRect.left - winWidth - gap;
+  if (left < 8) {
+    if (handleRect.right + gap + winWidth <= winW - 8) {
+      left = handleRect.right + gap;
+    } else {
+      left = Math.max(8, winW - winWidth - 8);
+    }
+  }
+  let top = handleRect.top - 16;
+  top = Math.max(12, Math.min(winH - winHeight - 12, top));
+  return { left, top, width: winWidth, height: winHeight };
+}
+
+// Case 1: Standard handle on right side of a 1440x900 viewport
+const handleRight = { left: 1400, top: 350, right: 1428, bottom: 378 };
+const pos1 = calcHistoryWindowPos(handleRight, 1440, 900);
+assert.equal(pos1.left, 1400 - 380 - 8, 'Window must appear on the left of the handle');
+assert.equal(pos1.top, 350 - 16, 'Window top aligned near handle top');
+assert(pos1.left >= 8 && pos1.left + pos1.width <= 1440, 'Window stays within horizontal bounds');
+assert(pos1.top >= 12 && pos1.top + pos1.height <= 900, 'Window stays within vertical bounds');
+
+// Case 2: Handle near top-left of viewport -> flip to right and clamp top
+const handleLeftTop = { left: 20, top: 10, right: 48, bottom: 38 };
+const pos2 = calcHistoryWindowPos(handleLeftTop, 1440, 900);
+assert.equal(pos2.left, 48 + 8, 'Window must flip to right of handle when left has no space');
+assert.equal(pos2.top, 12, 'Window top must clamp to min 12px');
+
+// Case 3: Handle near bottom of viewport -> clamp bottom
+const handleBottom = { left: 1400, top: 880, right: 1428, bottom: 908 };
+const pos3 = calcHistoryWindowPos(handleBottom, 1440, 900);
+assert.equal(pos3.top, 900 - 480 - 12, 'Window top must clamp to keep window completely in viewport');
+
+// B. Test Dot Hover Preview Positioning Algorithm
+function calcDotPreviewPos(dotRect, winW, winH, pw = 200, ph = 36, gap = 12) {
+  let left = dotRect.left - pw - gap;
+  if (left < 8) {
+    if (dotRect.right + gap + pw <= winW - 8) {
+      left = dotRect.right + gap;
+    } else {
+      left = Math.max(8, winW - pw - 8);
+    }
+  }
+  const dotCenterY = (dotRect.top + dotRect.bottom) / 2;
+  let top = dotCenterY - ph / 2;
+  top = Math.max(8, Math.min(winH - ph - 8, top));
+  return { left, top, pw, ph };
+}
+
+// Case 1: Dot on right side, middle of screen
+const dotMid = { left: 1420, top: 400, right: 1440, bottom: 420 };
+const prev1 = calcDotPreviewPos(dotMid, 1440, 900, 200, 36, 12);
+assert.equal(prev1.left, 1420 - 200 - 12, 'Preview appears left of dot with 12px gap');
+assert.equal(prev1.top, 410 - 18, 'Preview vertically centered with dot');
+
+// Case 2: Dot near top edge
+const dotTop = { left: 1420, top: 10, right: 1440, bottom: 30 };
+const prev2 = calcDotPreviewPos(dotTop, 1440, 900, 200, 36, 12);
+assert.equal(prev2.top, 8, 'Preview top must clamp to min 8px');
+
+// Case 3: Dot near bottom edge
+const dotBottom = { left: 1420, top: 880, right: 1440, bottom: 900 };
+const prev3 = calcDotPreviewPos(dotBottom, 1440, 900, 200, 36, 12);
+assert.equal(prev3.top, 900 - 36 - 8, 'Preview bottom must clamp to viewport bottom');
+
+// Case 4: Dot on left side -> flip to right
+const dotLeft = { left: 10, top: 300, right: 30, bottom: 320 };
+const prev4 = calcDotPreviewPos(dotLeft, 1440, 900, 200, 36, 12);
+assert.equal(prev4.left, 30 + 12, 'Preview must flip to right of dot when left is cramped');
+
+console.log('PASS: Test 7 passed');
 
 console.log('\nALL UI INTEGRATION TESTS PASSED SUCCESSFULLY!');

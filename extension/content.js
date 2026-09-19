@@ -810,7 +810,31 @@
     if (media && media.addEventListener) media.addEventListener("change", applyThemeToRoots);
   }
 
-  // --- In-Page Quick Export UI ---
+  function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function formatTimestamp(raw) {
+    if (!raw) return "";
+    try {
+      const t = typeof raw === "number" ? (raw < 1e11 ? raw * 1000 : raw) : new Date(raw).getTime();
+      if (Number.isNaN(t)) return "";
+      const d = new Date(t);
+      const hours = String(d.getHours()).padStart(2, "0");
+      const minutes = String(d.getMinutes()).padStart(2, "0");
+      return `${hours}:${minutes}`;
+    } catch (_) {
+      return "";
+    }
+  }
+
+  // --- In-Page Unified Dock & Quick Export UI ---
   function buildQuickExportUI() {
     if (quickExport || !document.documentElement) return;
     const host = document.createElement("div");
@@ -858,12 +882,12 @@
           transition: border-color 150ms ease, box-shadow 150ms ease;
         }
         .cce-quick-pill:hover { border-color: var(--cce-text-tertiary); }
-        .cce-quick-btn {
+        .cce-dock-btn {
           display: inline-flex;
           align-items: center;
-          gap: 5px;
+          justify-content: center;
           height: 100%;
-          padding: 0 10px;
+          padding: 0 11px;
           border: 0;
           background: transparent;
           color: var(--cce-text-primary);
@@ -871,35 +895,22 @@
           font-weight: 500;
           cursor: pointer;
           user-select: none;
-          transition: background-color 150ms ease;
-        }
-        .cce-quick-btn:hover:not(:disabled) { background: var(--cce-surface-hover); }
-        .cce-quick-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-        .cce-quick-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
-        .cce-format-trigger {
-          display: inline-flex;
-          align-items: center;
-          gap: 3px;
-          height: 100%;
-          padding: 0 7px;
-          border: 0;
-          border-left: 1px solid var(--cce-border-subtle);
-          background: transparent;
-          color: var(--cce-text-secondary);
-          font-size: 10.5px;
-          font-weight: 600;
-          cursor: pointer;
-          user-select: none;
           transition: background-color 150ms ease, color 150ms ease;
         }
-        .cce-format-trigger:hover { background: var(--cce-surface-hover); color: var(--cce-text-primary); }
-        .cce-format-trigger svg { width: 9px; height: 9px; transition: transform 150ms ease; }
-        .cce-format-trigger[aria-expanded="true"] svg { transform: rotate(180deg); }
+        .cce-dock-btn:hover:not(:disabled) { background: var(--cce-surface-hover); }
+        .cce-dock-btn.is-active { background: var(--cce-surface-hover); font-weight: 600; }
+        .cce-dock-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .cce-dock-divider {
+          width: 1px;
+          height: 14px;
+          background: var(--cce-border-subtle);
+          flex-shrink: 0;
+        }
         .cce-format-menu {
           position: absolute;
           bottom: 38px;
           right: 0;
-          min-width: 135px;
+          min-width: 140px;
           background: var(--cce-bg);
           backdrop-filter: blur(8px);
           -webkit-backdrop-filter: blur(8px);
@@ -934,44 +945,34 @@
       </style>
       <div class="cce-quick-shell cce-theme-light">
         <div class="cce-quick-pill">
-          <button class="cce-quick-btn" type="button" aria-label="导出当前会话" title="导出当前会话" disabled>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-            <span class="cce-quick-label">导出</span>
+          <button class="cce-dock-btn cce-dock-history" type="button" aria-label="Toggle prompt history" title="Toggle prompt history" style="${platformId === "chatgpt" ? "" : "display:none;"}">
+            History
           </button>
-          <button class="cce-format-trigger" type="button" aria-label="选择导出格式" aria-expanded="false" title="选择格式">
-            <span class="cce-format-badge">MD</span>
-            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <path d="M3 4.5l3 3 3-3"></path>
-            </svg>
+          <div class="cce-dock-divider" style="${platformId === "chatgpt" ? "" : "display:none;"}"></div>
+          <button class="cce-dock-btn cce-dock-export cce-quick-btn" type="button" aria-label="Export conversation" aria-haspopup="true" aria-expanded="false" title="Export conversation" disabled>
+            <span class="cce-quick-label">Export</span>
           </button>
         </div>
         <div class="cce-format-menu" role="menu" aria-hidden="true">
           <button class="cce-format-item" data-format="markdown" type="button" role="menuitem">Markdown</button>
           <button class="cce-format-item" data-format="json" type="button" role="menuitem">JSON</button>
-          <button class="cce-format-item" data-format="both" type="button" role="menuitem">两者 (MD+JSON)</button>
+          <button class="cce-format-item" data-format="both" type="button" role="menuitem">Markdown + JSON</button>
           <button class="cce-debug-item" type="button" role="menuitem" style="display:none;">Debug Bundle</button>
         </div>
       </div>`;
 
     const root = shadow.querySelector(".cce-quick-shell");
-    const btn = shadow.querySelector(".cce-quick-btn");
+    const historyBtn = shadow.querySelector(".cce-dock-history");
+    const exportBtn = shadow.querySelector(".cce-dock-export");
     const label = shadow.querySelector(".cce-quick-label");
-    const formatTrigger = shadow.querySelector(".cce-format-trigger");
-    const formatBadge = shadow.querySelector(".cce-format-badge");
     const formatMenu = shadow.querySelector(".cce-format-menu");
     const formatItems = Array.from(shadow.querySelectorAll(".cce-format-item"));
     const debugItem = shadow.querySelector(".cce-debug-item");
 
     let currentFormat = "markdown";
-    const formatLabels = { markdown: "MD", json: "JSON", both: "All" };
 
     function syncFormatSelection(format) {
       currentFormat = ["markdown", "json", "both"].includes(format) ? format : "markdown";
-      formatBadge.textContent = formatLabels[currentFormat] || "MD";
       formatItems.forEach((it) => it.classList.toggle("is-selected", it.dataset.format === currentFormat));
     }
 
@@ -982,27 +983,70 @@
 
     function closeFormatMenu() {
       formatMenu.classList.remove("is-open");
-      formatTrigger.setAttribute("aria-expanded", "false");
+      exportBtn.setAttribute("aria-expanded", "false");
     }
 
     function toggleFormatMenu() {
       const open = formatMenu.classList.toggle("is-open");
-      formatTrigger.setAttribute("aria-expanded", String(open));
+      exportBtn.setAttribute("aria-expanded", String(open));
     }
 
-    formatTrigger.addEventListener("click", (e) => {
+    if (historyBtn) {
+      historyBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeFormatMenu();
+        if (dotHistory && typeof dotHistory.toggleRail === "function") {
+          dotHistory.toggleRail();
+        }
+      });
+    }
+
+    exportBtn.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (exportBtn.disabled) return;
       toggleFormatMenu();
     });
+
+    async function triggerExportWithFormat(format) {
+      if (exportBtn.disabled) return;
+      currentFormat = format;
+      chrome.storage.local.set({ exportFormat: format });
+      syncFormatSelection(format);
+      closeFormatMenu();
+      exportBtn.disabled = true;
+      const prevText = label.textContent;
+      label.textContent = "导出中…";
+      try {
+        const result = await exportCurrent();
+        if (result && result.ok) {
+          label.textContent = "已导出 ✓";
+          setTimeout(() => {
+            label.textContent = prevText;
+            updatePanel();
+          }, 1500);
+        } else {
+          label.textContent = "导出失败";
+          exportBtn.title = (result && result.error) || "导出失败";
+          setTimeout(() => {
+            label.textContent = prevText;
+            updatePanel();
+          }, 2000);
+        }
+      } catch (err) {
+        label.textContent = "导出失败";
+        exportBtn.title = (err && err.message) || String(err);
+        setTimeout(() => {
+          label.textContent = prevText;
+          updatePanel();
+        }, 2000);
+      }
+    }
 
     formatItems.forEach((item) => {
       item.addEventListener("click", (e) => {
         e.stopPropagation();
         const nextFmt = item.dataset.format;
-        chrome.storage.local.set({ exportFormat: nextFmt });
-        syncFormatSelection(nextFmt);
-        closeFormatMenu();
-        updatePanel();
+        triggerExportWithFormat(nextFmt);
       });
     });
 
@@ -1018,48 +1062,19 @@
       if (!host.contains(e.target)) closeFormatMenu();
     });
 
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      closeFormatMenu();
-      if (btn.disabled) return;
-      btn.disabled = true;
-      const prevText = label.textContent;
-      label.textContent = "导出中…";
-      try {
-        const result = await exportCurrent();
-        if (result && result.ok) {
-          label.textContent = "已导出 ✓";
-          setTimeout(() => {
-            label.textContent = prevText;
-            updatePanel();
-          }, 1500);
-        } else {
-          label.textContent = "导出失败";
-          btn.title = (result && result.error) || "导出失败";
-          setTimeout(() => {
-            label.textContent = prevText;
-            updatePanel();
-          }, 2000);
-        }
-      } catch (err) {
-        label.textContent = "导出失败";
-        btn.title = (err && err.message) || String(err);
-        setTimeout(() => {
-          label.textContent = prevText;
-          updatePanel();
-        }, 2000);
-      }
-    });
-
     quickExport = {
       root,
-      btn,
+      btn: exportBtn,
       label,
+      historyBtn,
       debugItem,
+      setHistoryActive: (active) => {
+        if (historyBtn) historyBtn.classList.toggle("is-active", !!active);
+      },
       update: (snapshot) => {
         const ready = snapshot.captured && snapshot.incompleteReasons.length === 0 && snapshot.activePathMessages > 0;
-        btn.disabled = !ready;
-        btn.title = ready ? `导出当前会话 (${formatLabels[currentFormat] || "MD"})` : (lastError || snapshot.readyReason || "等待捕获会话数据…");
+        exportBtn.disabled = !ready;
+        exportBtn.title = ready ? "导出当前会话" : (lastError || snapshot.readyReason || "等待捕获会话数据…");
         if (debugItem) {
           debugItem.style.display = platformId === "gemini" && snapshot.debugBundleAvailable ? "flex" : "none";
         }
@@ -1070,7 +1085,7 @@
     applyThemeToRoots();
   }
 
-  // --- Dot History Navigator UI (ChatGPT only) ---
+  // --- Dot History & Voyage History Window UI (ChatGPT only) ---
   function buildDotHistoryUI() {
     if (dotHistory || platformId !== "chatgpt" || !navigatorBackend || !document.documentElement) return;
 
@@ -1084,61 +1099,84 @@
         * { box-sizing: border-box; }
         .cce-theme-light {
           --cce-bg: #ffffff;
-          --cce-border: rgba(0, 0, 0, 0.08);
+          --cce-bg-secondary: #f4f4f4;
+          --cce-border: rgba(0, 0, 0, 0.1);
+          --cce-border-subtle: rgba(0, 0, 0, 0.06);
           --cce-text-primary: #0d0d0d;
           --cce-text-secondary: #5d5d5d;
           --cce-text-tertiary: #8e8e8e;
-          --cce-handle-hover: rgba(0, 0, 0, 0.06);
+          --cce-surface-hover: rgba(0, 0, 0, 0.05);
+          --cce-active-item-bg: rgba(0, 0, 0, 0.08);
           --cce-dot-muted: rgba(0, 0, 0, 0.25);
           --cce-dot-active: #0d0d0d;
-          --cce-shadow-popover: 0 4px 16px rgba(0, 0, 0, 0.08);
+          --cce-shadow-pill: 0 2px 8px rgba(0, 0, 0, 0.08);
+          --cce-shadow-popover: 0 4px 16px rgba(0, 0, 0, 0.1);
+          --cce-shadow-window: 0 16px 48px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.08);
         }
         .cce-theme-dark {
-          --cce-bg: #262626;
-          --cce-border: rgba(255, 255, 255, 0.1);
+          --cce-bg: #212121;
+          --cce-bg-secondary: #2c2c2c;
+          --cce-border: rgba(255, 255, 255, 0.12);
+          --cce-border-subtle: rgba(255, 255, 255, 0.08);
           --cce-text-primary: #ececec;
           --cce-text-secondary: #b4b4b4;
           --cce-text-tertiary: #737373;
-          --cce-handle-hover: rgba(255, 255, 255, 0.08);
+          --cce-surface-hover: rgba(255, 255, 255, 0.08);
+          --cce-active-item-bg: rgba(255, 255, 255, 0.12);
           --cce-dot-muted: rgba(255, 255, 255, 0.28);
           --cce-dot-active: #ececec;
-          --cce-shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.35);
+          --cce-shadow-pill: 0 2px 10px rgba(0, 0, 0, 0.35);
+          --cce-shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.4);
+          --cce-shadow-window: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.1);
         }
         .cce-dot-shell { pointer-events: none; width: 100%; height: 100%; position: relative; }
+
+        /* [ · · · ] Handle: Native icon button launcher for History Window */
         .cce-dot-handle {
           position: fixed;
-          width: 44px;
-          height: 32px;
+          width: 28px;
+          height: 28px;
           padding: 0;
-          border: 0;
-          border-radius: 8px;
-          background: transparent;
-          color: var(--cce-text-tertiary);
-          cursor: grab;
-          z-index: 2147483647;
+          border: 1px solid var(--cce-border-subtle);
+          border-radius: 7px;
+          background: var(--cce-bg);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          color: var(--cce-text-secondary);
+          cursor: pointer;
+          z-index: 2147483646;
           display: flex;
           align-items: center;
           justify-content: center;
           touch-action: none;
           pointer-events: auto;
           user-select: none;
-          transition: background-color 150ms ease, color 150ms ease;
+          box-shadow: var(--cce-shadow-pill);
+          transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
         }
-        .cce-dot-handle:hover,
-        .cce-dot-handle[aria-expanded="true"] {
-          background: var(--cce-handle-hover);
-          color: var(--cce-text-secondary);
+        .cce-dot-handle:hover {
+          background: var(--cce-surface-hover);
+          color: var(--cce-text-primary);
+          border-color: var(--cce-text-tertiary);
         }
-        .cce-dot-handle.is-dragging { cursor: grabbing; transition: none; }
         .cce-dot-handle:focus-visible { outline: 1px solid var(--cce-text-secondary); outline-offset: 1px; }
-        .cce-dot-handle-mark { display: flex; gap: 7px; align-items: center; }
+        .cce-dot-handle-mark { display: flex; gap: 3.5px; align-items: center; }
         .cce-dot-handle-mark i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; display: block; }
+
+        /* Dot History Rail: Pure dots without connection line or card background */
         .cce-dot-timeline {
           position: fixed;
-          width: 44px;
-          z-index: 2147483646;
+          right: 12px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 20px;
+          max-height: min(440px, calc(100vh - 140px));
+          z-index: 2147483645;
           pointer-events: auto;
           user-select: none;
+          background: transparent;
+          border: none;
+          box-shadow: none;
           transition: opacity 150ms ease;
         }
         .cce-dot-timeline.is-hidden { display: none; }
@@ -1149,14 +1187,16 @@
           overflow-x: hidden;
           overscroll-behavior: contain;
           scrollbar-width: none;
+          background: transparent;
+          border: none;
         }
         .cce-dot-track::-webkit-scrollbar { display: none; }
         .cce-dot-content { position: relative; width: 100%; }
         .cce-dot-node {
           position: absolute;
           left: 50%;
-          width: 28px;
-          height: 28px;
+          width: 20px;
+          height: 20px;
           transform: translate(-50%, -50%);
           padding: 0;
           border: 0;
@@ -1172,25 +1212,27 @@
           height: 4px;
           border-radius: 50%;
           background: var(--cce-dot-muted);
-          transition: transform 150ms ease, background-color 150ms ease;
+          transition: transform 120ms ease, background-color 120ms ease;
           pointer-events: none;
         }
         .cce-dot-node:hover .cce-dot,
         .cce-dot-node:focus-visible .cce-dot {
           background: var(--cce-dot-active);
-          transform: scale(1.4);
+          transform: scale(1.35);
         }
         .cce-dot-node.is-active .cce-dot {
+          width: 6px;
+          height: 6px;
           background: var(--cce-dot-active);
-          transform: scale(1.75);
+          transform: none;
         }
         .cce-dot-node:focus-visible { outline: 1px solid var(--cce-text-secondary); outline-offset: 1px; }
+
+        /* Dot Hover Preview Tooltip: Anchored next to hovered dot */
         .cce-dot-preview {
-          position: absolute;
-          right: 48px;
-          left: auto;
+          position: fixed;
           width: max-content;
-          max-width: min(260px, calc(100vw - 76px));
+          max-width: min(280px, calc(100vw - 80px));
           box-sizing: border-box;
           border: 1px solid var(--cce-border);
           border-radius: 8px;
@@ -1204,23 +1246,184 @@
           opacity: 0;
           visibility: hidden;
           pointer-events: none;
-          transition: opacity 120ms ease;
+          transition: opacity 100ms ease;
           z-index: 2147483647;
+          display: none;
         }
-        .cce-dot-preview.is-visible { opacity: 1; visibility: visible; }
-        .cce-dot-timeline.is-flipped .cce-dot-preview { left: 48px; right: auto; }
+        .cce-dot-preview.is-visible { display: block; opacity: 1; visibility: visible; }
+
+        /* Voyage-style Anchored History Window Popover */
+        .cce-history-window {
+          position: fixed;
+          width: 380px;
+          max-width: calc(100vw - 24px);
+          max-height: min(480px, calc(100vh - 32px));
+          background: var(--cce-bg);
+          border: 1px solid var(--cce-border);
+          border-radius: 12px;
+          box-shadow: var(--cce-shadow-window);
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          z-index: 2147483647;
+          pointer-events: auto;
+          user-select: none;
+          animation: cce-appear 140ms cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .cce-history-window.is-hidden { display: none; }
+        @keyframes cce-appear {
+          from { opacity: 0; transform: scale(0.97); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        .cce-history-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 12px;
+          border-bottom: 1px solid var(--cce-border-subtle);
+        }
+        .cce-history-search-wrap {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex: 1;
+          background: var(--cce-surface-hover);
+          border: 1px solid var(--cce-border-subtle);
+          border-radius: 8px;
+          padding: 6px 10px;
+          transition: border-color 150ms ease;
+        }
+        .cce-history-search-wrap:focus-within {
+          border-color: var(--cce-text-tertiary);
+        }
+        .cce-history-search-icon {
+          width: 14px;
+          height: 14px;
+          color: var(--cce-text-tertiary);
+          flex-shrink: 0;
+        }
+        .cce-history-search-input {
+          flex: 1;
+          border: 0;
+          background: transparent;
+          color: var(--cce-text-primary);
+          font-size: 13px;
+          outline: none;
+          padding: 0;
+          font-family: inherit;
+        }
+        .cce-history-search-input::placeholder {
+          color: var(--cce-text-tertiary);
+        }
+        .cce-history-close-btn {
+          width: 28px;
+          height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: 0;
+          border-radius: 6px;
+          background: transparent;
+          color: var(--cce-text-secondary);
+          cursor: pointer;
+          transition: background-color 120ms ease, color 120ms ease;
+        }
+        .cce-history-close-btn:hover {
+          background: var(--cce-surface-hover);
+          color: var(--cce-text-primary);
+        }
+        .cce-history-close-btn svg { width: 13px; height: 13px; }
+        .cce-history-body {
+          flex: 1;
+          overflow-y: auto;
+          padding: 6px;
+          overscroll-behavior: contain;
+        }
+        .cce-history-list {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .cce-history-item {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 10px;
+          border-radius: 8px;
+          cursor: pointer;
+          font-size: 12.5px;
+          line-height: 1.4;
+          color: var(--cce-text-primary);
+          transition: background-color 100ms ease;
+        }
+        .cce-history-item:hover {
+          background: var(--cce-surface-hover);
+        }
+        .cce-history-item.is-active {
+          background: var(--cce-active-item-bg);
+          font-weight: 500;
+        }
+        .cce-history-item-order {
+          font-size: 11px;
+          font-weight: 600;
+          color: var(--cce-text-tertiary);
+          min-width: 24px;
+          flex-shrink: 0;
+        }
+        .cce-history-item.is-active .cce-history-item-order {
+          color: var(--cce-text-primary);
+        }
+        .cce-history-item-preview {
+          flex: 1;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .cce-history-item-time {
+          font-size: 11px;
+          color: var(--cce-text-tertiary);
+          flex-shrink: 0;
+          margin-left: 6px;
+        }
+        .cce-history-empty {
+          padding: 36px 16px;
+          text-align: center;
+          color: var(--cce-text-tertiary);
+          font-size: 13px;
+        }
+        .cce-history-empty.is-hidden { display: none; }
       </style>
       <div class="cce-dot-shell cce-theme-light">
-        <button class="cce-dot-handle" type="button" aria-label="Toggle prompt history" aria-expanded="false" title="Prompt History">
+        <button class="cce-dot-handle" type="button" aria-label="Open prompt history" title="Prompt History">
           <span class="cce-dot-handle-mark" aria-hidden="true">
             <i></i><i></i><i></i>
           </span>
         </button>
-        <div class="cce-dot-timeline is-hidden" aria-label="Prompt Timeline">
+        <div class="cce-dot-timeline is-hidden" aria-label="Prompt Dots Timeline">
           <div class="cce-dot-track">
             <div class="cce-dot-content"></div>
           </div>
-          <div class="cce-dot-preview" role="tooltip"></div>
+        </div>
+        <div class="cce-dot-preview" role="tooltip"></div>
+        <div class="cce-history-window cce-history-overlay is-hidden" role="dialog" aria-label="Prompt History Window">
+          <div class="cce-history-header">
+            <div class="cce-history-search-wrap">
+              <svg class="cce-history-search-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+                <circle cx="7" cy="7" r="4.5"></circle>
+                <path d="M10.5 10.5L14 14" stroke-linecap="round"></path>
+              </svg>
+              <input type="text" class="cce-history-search-input" placeholder="搜索提示词 (Search prompts)..." autocomplete="off" spellcheck="false" />
+            </div>
+            <button class="cce-history-close-btn" type="button" aria-label="Close" title="关闭 (Esc)">
+              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round">
+                <path d="M3 3l8 8M11 3l-8 8"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="cce-history-body">
+            <div class="cce-history-list" role="listbox"></div>
+            <div class="cce-history-empty is-hidden">未找到匹配的提示词</div>
+          </div>
         </div>
       </div>`;
 
@@ -1231,18 +1434,53 @@
     const content = shadow.querySelector(".cce-dot-content");
     const preview = shadow.querySelector(".cce-dot-preview");
 
-    let isExpanded = false;
+    const historyWindow = shadow.querySelector(".cce-history-window");
+    const overlay = historyWindow;
+    const closeBtn = shadow.querySelector(".cce-history-close-btn");
+    const searchInput = shadow.querySelector(".cce-history-search-input");
+    const historyList = shadow.querySelector(".cce-history-list");
+    const historyEmpty = shadow.querySelector(".cce-history-empty");
+
+    let isRailExpanded = false;
+    let isHistoryWindowOpen = false;
     let initializedForCurrent = false;
     let currentItems = [];
     let activeIndex = -1;
 
     function clampPosition(left, top) {
-      const maxLeft = Math.max(8, window.innerWidth - 44 - 8);
-      const maxTop = Math.max(8, window.innerHeight - 32 - 8);
+      const maxLeft = Math.max(8, window.innerWidth - 28 - 8);
+      const maxTop = Math.max(8, window.innerHeight - 28 - 8);
       return {
         left: Math.max(8, Math.min(maxLeft, left)),
         top: Math.max(8, Math.min(maxTop, top))
       };
+    }
+
+    function updateHistoryWindowPosition() {
+      if (!isHistoryWindowOpen) return;
+      const handleRect = handle.getBoundingClientRect();
+      const winWidth = Math.min(380, window.innerWidth - 24);
+      const winHeight = Math.min(480, window.innerHeight - 32);
+      const gap = 8;
+
+      // 1. Horizontal: Preferred to the left of handle
+      let left = handleRect.left - winWidth - gap;
+      if (left < 8) {
+        if (handleRect.right + gap + winWidth <= window.innerWidth - 8) {
+          left = handleRect.right + gap;
+        } else {
+          left = Math.max(8, window.innerWidth - winWidth - 8);
+        }
+      }
+
+      // 2. Vertical: Preferred to align near handle top or left-bottom
+      let top = handleRect.top - 16;
+      top = Math.max(12, Math.min(window.innerHeight - winHeight - 12, top));
+
+      historyWindow.style.left = `${Math.round(left)}px`;
+      historyWindow.style.top = `${Math.round(top)}px`;
+      historyWindow.style.width = `${Math.round(winWidth)}px`;
+      historyWindow.style.maxHeight = `${Math.round(winHeight)}px`;
     }
 
     function applyHandlePosition(left, top) {
@@ -1250,11 +1488,13 @@
       handle.style.left = `${clamped.left}px`;
       handle.style.top = `${clamped.top}px`;
       handle.style.right = "auto";
-      updateTimelinePosition();
+      if (isHistoryWindowOpen) {
+        updateHistoryWindowPosition();
+      }
     }
 
-    const defaultLeft = window.innerWidth - 44 - 16;
-    const defaultTop = (window.innerHeight - 32) / 2;
+    const defaultLeft = window.innerWidth - 28 - 14;
+    const defaultTop = Math.round(window.innerHeight / 2 - 140);
     applyHandlePosition(defaultLeft, defaultTop);
 
     chrome.storage.local.get({ cce_dot_position: null }).then(({ cce_dot_position }) => {
@@ -1290,8 +1530,6 @@
       if (!hasMoved) {
         if (dx * dx + dy * dy < 25) return;
         hasMoved = true;
-        handle.classList.add("is-dragging");
-        hidePreview();
       }
       const nextPos = clampPosition(startLeft + dx, startTop + dy);
       curLeft = nextPos.left;
@@ -1299,13 +1537,14 @@
       handle.style.left = `${curLeft}px`;
       handle.style.top = `${curTop}px`;
       handle.style.right = "auto";
-      updateTimelinePosition();
+      if (isHistoryWindowOpen) {
+        updateHistoryWindowPosition();
+      }
     });
 
     function finishDrag() {
       if (!isDragging) return;
       isDragging = false;
-      handle.classList.remove("is-dragging");
       if (hasMoved) {
         chrome.storage.local.set({ cce_dot_position: { left: curLeft, top: curTop } });
       }
@@ -1317,39 +1556,67 @@
     window.addEventListener("resize", () => {
       const rect = handle.getBoundingClientRect();
       applyHandlePosition(rect.left, rect.top);
+      if (isHistoryWindowOpen) {
+        updateHistoryWindowPosition();
+      }
+      hidePreview();
     });
-
-    function updateTimelinePosition() {
-      if (!isExpanded) return;
-      const anchor = handle.getBoundingClientRect();
-      const below = window.innerHeight - anchor.bottom - 16;
-      const above = anchor.top - 16;
-      const isBelow = below >= above;
-      const trackHeight = Math.max(48, Math.min(360, isBelow ? below : above));
-      const top = isBelow ? anchor.bottom + 6 : anchor.top - trackHeight - 6;
-      timeline.style.left = `${anchor.left}px`;
-      timeline.style.top = `${Math.max(8, top)}px`;
-      timeline.style.height = `${trackHeight}px`;
-
-      const isFlipped = anchor.left < window.innerWidth / 2;
-      timeline.classList.toggle("is-flipped", isFlipped);
-    }
 
     function showPreview(index, node) {
       const item = currentItems[index];
-      if (!item || !preview) return;
-      preview.textContent = item.preview || item.text || `Prompt ${item.order || index + 1}`;
+      if (!item || !preview || !node) return;
+      const text = item.previewText || item.preview || item.text || "";
+      const timeStr = formatTimestamp(item.createTime);
+      const orderStr = `#${item.userOrder || index + 1}`;
+
+      preview.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;font-size:10.5px;font-weight:600;color:var(--cce-text-tertiary);">
+          <span>${orderStr}</span>
+          ${timeStr ? `<span>${timeStr}</span>` : ""}
+        </div>
+        <div style="color:var(--cce-text-primary);word-break:break-word;max-height:140px;overflow:hidden;text-overflow:ellipsis;">
+          ${escapeHtml(text)}
+        </div>
+      `;
+
+      preview.style.display = "block";
+      preview.style.left = "0px";
+      preview.style.top = "0px";
+      preview.style.right = "auto";
+      preview.style.bottom = "auto";
+
+      const dotRect = node.getBoundingClientRect();
+      const pw = preview.offsetWidth || 240;
+      const ph = preview.offsetHeight || 36;
+      const gap = 12;
+
+      // 1. Calculate preferred left position (to the left of dot)
+      let left = dotRect.left - pw - gap;
+      if (left < 8) {
+        if (dotRect.right + gap + pw <= window.innerWidth - 8) {
+          left = dotRect.right + gap;
+        } else {
+          left = Math.max(8, window.innerWidth - pw - 8);
+        }
+      }
+
+      // 2. Vertical center align with dot
+      const dotCenterY = (dotRect.top + dotRect.bottom) / 2;
+      let top = dotCenterY - ph / 2;
+
+      // 3. Viewport clamp near top/bottom edges
+      top = Math.max(8, Math.min(window.innerHeight - ph - 8, top));
+
+      preview.style.left = `${Math.round(left)}px`;
+      preview.style.top = `${Math.round(top)}px`;
       preview.classList.add("is-visible");
-      const nodeRect = node.getBoundingClientRect();
-      const timelineRect = timeline.getBoundingClientRect();
-      const previewHeight = preview.offsetHeight || 32;
-      const targetTop = (nodeRect.top + nodeRect.height / 2) - previewHeight / 2;
-      const clampedTop = Math.max(8, Math.min(window.innerHeight - previewHeight - 8, targetTop));
-      preview.style.top = `${clampedTop - timelineRect.top}px`;
     }
 
     function hidePreview() {
-      if (preview) preview.classList.remove("is-visible");
+      if (preview) {
+        preview.classList.remove("is-visible");
+        preview.style.display = "none";
+      }
     }
 
     track.addEventListener("wheel", (e) => {
@@ -1367,6 +1634,12 @@
       buttons.forEach((btn, idx) => {
         btn.classList.toggle("is-active", idx === index);
       });
+      if (isHistoryWindowOpen) {
+        const listItems = historyList.querySelectorAll(".cce-history-item");
+        listItems.forEach((it) => {
+          it.classList.toggle("is-active", Number(it.dataset.index) === index);
+        });
+      }
     }
 
     function renderDots(items) {
@@ -1375,7 +1648,7 @@
       if (currentItems.length === 0) return;
 
       const count = currentItems.length;
-      const trackHeight = track.clientHeight || 280;
+      const trackHeight = track.clientHeight || 320;
       const pitch = count <= 1 ? 24 : Math.min(24, Math.max(8, (trackHeight - 20) / (count - 1)));
       const contentHeight = Math.max(trackHeight, count * pitch + 16);
       content.style.height = `${contentHeight}px`;
@@ -1386,7 +1659,7 @@
         node.type = "button";
         node.className = "cce-dot-node";
         node.dataset.index = String(index);
-        node.setAttribute("aria-label", `Jump to prompt ${item.order || index + 1}`);
+        node.setAttribute("aria-label", `Jump to prompt ${item.userOrder || item.order || index + 1}`);
 
         const dot = document.createElement("span");
         dot.className = "cce-dot";
@@ -1415,12 +1688,13 @@
       }
     }
 
-    function setExpanded(expanded) {
-      isExpanded = expanded;
-      handle.setAttribute("aria-expanded", String(expanded));
+    function setRailExpanded(expanded) {
+      isRailExpanded = expanded;
       timeline.classList.toggle("is-hidden", !expanded);
+      if (quickExport && typeof quickExport.setHistoryActive === "function") {
+        quickExport.setHistoryActive(expanded);
+      }
       if (expanded) {
-        updateTimelinePosition();
         if (!initializedForCurrent) {
           initializedForCurrent = true;
           globalThis.CCEHistoryNavigator.open();
@@ -1431,30 +1705,145 @@
       }
     }
 
+    // --- Voyage-style History Window ---
+    function renderHistoryList(query = "") {
+      historyList.innerHTML = "";
+      const q = (query || "").trim().toLowerCase();
+      const filtered = q
+        ? currentItems.filter((it) => (it.previewText || it.preview || it.text || "").toLowerCase().includes(q))
+        : currentItems;
+
+      if (filtered.length === 0) {
+        historyEmpty.classList.remove("is-hidden");
+        return;
+      }
+      historyEmpty.classList.add("is-hidden");
+
+      const fragment = document.createDocumentFragment();
+      filtered.forEach((item) => {
+        const itemIdx = currentItems.indexOf(item);
+        const el = document.createElement("div");
+        el.className = "cce-history-item";
+        el.setAttribute("role", "option");
+        el.dataset.index = String(itemIdx);
+        if (itemIdx === activeIndex) {
+          el.classList.add("is-active");
+        }
+
+        const orderSpan = document.createElement("span");
+        orderSpan.className = "cce-history-item-order";
+        orderSpan.textContent = `#${item.userOrder || itemIdx + 1}`;
+        el.appendChild(orderSpan);
+
+        const previewSpan = document.createElement("span");
+        previewSpan.className = "cce-history-item-preview";
+        previewSpan.textContent = item.previewText || item.preview || item.text || "（空提示词）";
+        el.appendChild(previewSpan);
+
+        const timeStr = formatTimestamp(item.createTime);
+        if (timeStr) {
+          const timeSpan = document.createElement("span");
+          timeSpan.className = "cce-history-item-time";
+          timeSpan.textContent = timeStr;
+          el.appendChild(timeSpan);
+        }
+
+        el.addEventListener("click", () => {
+          navigatorBackend.jumpToPrompt(item);
+          setActiveDot(itemIdx);
+          closeHistoryWindow();
+        });
+
+        fragment.appendChild(el);
+      });
+      historyList.appendChild(fragment);
+    }
+
+    function openHistoryWindow() {
+      isHistoryWindowOpen = true;
+      historyWindow.classList.remove("is-hidden");
+      updateHistoryWindowPosition();
+      if (!initializedForCurrent) {
+        initializedForCurrent = true;
+        globalThis.CCEHistoryNavigator.open();
+      }
+      currentItems = navigatorBackend.getState().items || [];
+      searchInput.value = "";
+      renderHistoryList("");
+      updateHistoryWindowPosition();
+      setTimeout(() => {
+        searchInput.focus();
+        const activeItemEl = historyList.querySelector(".cce-history-item.is-active");
+        if (activeItemEl) {
+          activeItemEl.scrollIntoView({ block: "center", behavior: "instant" });
+        }
+      }, 50);
+    }
+
+    function closeHistoryWindow() {
+      isHistoryWindowOpen = false;
+      historyWindow.classList.add("is-hidden");
+      searchInput.value = "";
+    }
+
+    searchInput.addEventListener("input", () => {
+      renderHistoryList(searchInput.value);
+    });
+
+    closeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeHistoryWindow();
+    });
+
+    // Close on outside pointerdown (no modal backdrop)
+    document.addEventListener("pointerdown", (e) => {
+      if (!isHistoryWindowOpen) return;
+      const path = e.composedPath ? e.composedPath() : [];
+      if (!path.includes(historyWindow) && !path.includes(handle)) {
+        closeHistoryWindow();
+      }
+    });
+
+    // Handle button ONLY launches History Window
     handle.addEventListener("click", (e) => {
+      e.stopPropagation();
       if (hasMoved) {
         hasMoved = false;
         return;
       }
-      setExpanded(!isExpanded);
+      if (isHistoryWindowOpen) {
+        closeHistoryWindow();
+      } else {
+        openHistoryWindow();
+      }
     });
 
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && isExpanded) {
-        setExpanded(false);
-        handle.focus();
+      if (e.key === "Escape") {
+        if (isHistoryWindowOpen) {
+          closeHistoryWindow();
+          handle.focus();
+        } else if (isRailExpanded) {
+          setRailExpanded(false);
+        }
       }
     });
 
     navigatorBackend.subscribe((state) => {
-      if (isExpanded && state.items) {
-        renderDots(state.items);
+      if (state.items) {
+        currentItems = state.items;
+        if (isRailExpanded) {
+          renderDots(state.items);
+        }
+        if (isHistoryWindowOpen) {
+          renderHistoryList(searchInput.value);
+        }
       }
     });
 
     let scrollThrottle = null;
     function syncActiveFromViewport() {
-      if (!isExpanded || currentItems.length === 0) return;
+      if ((!isRailExpanded && !isHistoryWindowOpen) || currentItems.length === 0) return;
       const viewportCenter = window.innerHeight / 2;
       let closestIdx = -1;
       let minDistance = Infinity;
@@ -1494,13 +1883,19 @@
 
     dotHistory = {
       root,
+      toggleRail: () => setRailExpanded(!isRailExpanded),
+      openRail: () => setRailExpanded(true),
+      closeRail: () => setRailExpanded(false),
+      openWindow: openHistoryWindow,
+      closeWindow: closeHistoryWindow,
       reset: () => {
         initializedForCurrent = false;
         currentItems = [];
         activeIndex = -1;
-        if (isExpanded) {
-          setExpanded(false);
+        if (isRailExpanded) {
+          setRailExpanded(false);
         }
+        closeHistoryWindow();
       }
     };
 
