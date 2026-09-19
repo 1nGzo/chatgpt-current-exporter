@@ -3,7 +3,7 @@
   "permissions": ["storage"],
   "name": "Current Conversation Exporter",
   "version": "0.1.0",
-  "description": "Capture the current ChatGPT or Grok conversation response locally and export raw JSON plus active-path Markdown.",
+  "description": "Capture the current ChatGPT, Gemini or Grok conversation locally and export verified structured data.",
   "action": {
     "default_title": "导出当前会话",
     "default_popup": "popup.html"
@@ -12,9 +12,10 @@
     {
       "matches": [
         "https://chatgpt.com/*",
-        "https://chat.openai.com/*"
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*"
       ],
-      "js": ["fallback-config.js", "injected.js"],
+      "js": ["core/platform.js", "adapters/gemini.js", "fallback-config.js", "injected.js"],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": false
@@ -22,9 +23,15 @@
     {
       "matches": [
         "https://chatgpt.com/*",
-        "https://chat.openai.com/*"
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*"
       ],
       "js": [
+        "core/platform.js",
+        "core/normalized.js",
+        "adapters/chatgpt.js",
+        "adapters/chatgpt-navigator.js",
+        "adapters/gemini-isolated.js",
         "converter.js",
         "content.js"
       ],
@@ -52,7 +59,8 @@
       "resources": ["injected.js"],
       "matches": [
         "https://chatgpt.com/*",
-        "https://chat.openai.com/*"
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*"
       ]
     }
   ],

@@ -4,7 +4,14 @@
   if (window.__CCE_REQUEST_OBSERVER__) return;
   window.__CCE_REQUEST_OBSERVER__ = true;
   const SOURCE = "chatgpt-current-exporter";
+  const platformCore = globalThis.CCEPlatformCore;
+  const platform = platformCore && typeof platformCore.detectPlatform === "function"
+    ? platformCore.detectPlatform(window.location.href)
+    : "chatgpt";
+  const geminiAdapter = globalThis.CCEGeminiAdapter;
   const diagnostics = {
+    platform,
+    platformLabel: platformCore && typeof platformCore.definition === "function" ? platformCore.definition(platform).label : platform,
     injected: true,
     fetchHooked: false,
     xhrHooked: false,
@@ -40,16 +47,66 @@
     lastEndpointKeys: [],
     lastEndpointSchema: { mapping: false, currentNode: false, title: false, conversationId: null },
     lastCandidatePath: "",
+    lastCandidateContentType: "",
     lastSchema: { mapping: false, messages: false, currentNode: false, title: false, conversationId: null, schemaType: "none" },
     lastContentType: "",
     lastResponsePath: "",
     observedResponsePaths: [],
-    cacheSize: 0
+    cacheSize: 0,
+    candidateResponses: 0,
+    candidateUserTurns: 0,
+    candidateAssistantTurns: 0,
+    normalizedUserTurns: 0,
+    normalizedAssistantTurns: 0,
+    possibleTotalTurns: 0,
+    topLevelShape: "unknown",
+    structuralSignature: "",
+    paginationDetected: false,
+    truncationDetected: false,
+    branchSelection: "NONE_DETECTED",
+    completeness: "WAITING",
+    readyReason: "等待 Gemini 结构化 response",
+    batchResponses: 0,
+    batchFrames: 0,
+    batchInnerPayloads: 0,
+    batchParseFailures: 0,
+    batchRpcIds: []
   };
   const cache = new Map();
   const cacheOrder = [];
   const pageCache = [];
+  const geminiPayloadCache = [];
+  const geminiPayloadKeys = new Set();
   let originalFetch = null;
+
+  const SENSITIVE_KEY = /^(?:authorization|cookie|setcookie|accesstoken|access_token|refreshtoken|refresh_token|idtoken|id_token|sessiontoken|session_token|csrftoken|csrf_token|xsrftoken|xsrf_token|apikey|api_key|clientsecret|client_secret|password|secret|credential|credentials|token)$/i;
+
+  function redactSensitiveFields(value, depth = 0, seen = new WeakSet()) {
+    if (value === null || value === undefined || typeof value !== "object" || depth > 14) return value;
+    if (seen.has(value)) return "[cycle omitted]";
+    seen.add(value);
+    if (Array.isArray(value)) return value.map((item) => redactSensitiveFields(item, depth + 1, seen));
+    const result = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (SENSITIVE_KEY.test(key)) continue;
+      result[key] = redactSensitiveFields(child, depth + 1, seen);
+    }
+    return result;
+  }
+
+  function payloadFingerprint(value) {
+    try {
+      const text = JSON.stringify(value);
+      let hash = 2166136261;
+      for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return `${text.length}:${(hash >>> 0).toString(16)}`;
+    } catch (_) {
+      return "unserializable";
+    }
+  }
 
   function publishStatus() {
     window.postMessage({ source: SOURCE, type: "observer-status", diagnostics: {
@@ -92,6 +149,9 @@
   }
 
   function currentPageConversationId() {
+    if (platform === "gemini" && platformCore && typeof platformCore.conversationIdHint === "function") {
+      return platformCore.conversationIdHint(window.location.href, platform);
+    }
     try {
       const parts = new URL(window.location.href).pathname.split("/").filter(Boolean);
       const index = parts.lastIndexOf("c");
@@ -254,11 +314,101 @@
     diagnostics.cacheSize = cache.size;
   }
 
-  function observePayload(payload, transport, contentType, responsePath) {
+  function isGeminiBatchPath(responsePath) {
+    return platform === "gemini" && /\/batchexecute(?:$|[?#])/.test(String(responsePath || ""));
+  }
+
+  function postGeminiStructure(payload, transport, contentType, responsePath, rpcId, topLevelShape) {
+    if (!geminiAdapter || typeof geminiAdapter.inspectResponse !== "function") return;
+    const report = geminiAdapter.inspectResponse(
+      payload,
+      safePath(responsePath),
+      currentPageConversationId(),
+      topLevelShape ? { topLevelShape } : {}
+    );
+    diagnostics.candidateResponses += report.possibleCandidate ? 1 : 0;
+    diagnostics.geminiConversationCandidates = diagnostics.candidateResponses;
+    diagnostics.candidateUserTurns = report.possibleUserMessages || 0;
+    diagnostics.candidateAssistantTurns = report.possibleAssistantMessages || 0;
+    diagnostics.possibleTotalTurns = report.possibleTurnCount || 0;
+    diagnostics.normalizedUserTurns = 0;
+    diagnostics.normalizedAssistantTurns = 0;
+    diagnostics.topLevelShape = report.topLevelShape || topLevelShape || "unknown";
+    diagnostics.structuralSignature = report.structuralSignature || "";
+    diagnostics.geminiLastTopLevelKeys = Array.isArray(report.topLevelKeys) ? report.topLevelKeys.slice(0, 80) : [];
+    diagnostics.geminiLastWrapperDepth = report.wrapperDepth === undefined ? null : report.wrapperDepth;
+    diagnostics.geminiLastTurnCount = report.possibleTurnCount || 0;
+    diagnostics.geminiLastUserMessages = report.possibleUserMessages || 0;
+    diagnostics.geminiLastAssistantMessages = report.possibleAssistantMessages || 0;
+    diagnostics.geminiPaginationDetected = Boolean(report.paginationDetected);
+    diagnostics.geminiPaginationSignals = Array.isArray(report.paginationSignals) ? report.paginationSignals.slice(0, 20) : [];
+    diagnostics.geminiPaginationPossible = Boolean(report.paginationPossible);
+    diagnostics.geminiTruncationDetected = Boolean(report.truncationDetected);
+    diagnostics.geminiTruncationSignals = Array.isArray(report.truncationSignals) ? report.truncationSignals.slice(0, 20) : [];
+    diagnostics.geminiCompleteness = report.completeness || "WAITING";
+    diagnostics.completeness = diagnostics.geminiCompleteness;
+    diagnostics.geminiSchemaVerified = Boolean(report.schemaVerified);
+    diagnostics.geminiOrderingValidated = Boolean(report.orderingValidated);
+    diagnostics.geminiBranchSelection = report.branchSelection || "NONE_DETECTED";
+    diagnostics.branchSelection = diagnostics.geminiBranchSelection;
+    diagnostics.geminiLastFieldHints = Array.isArray(report.fieldHints) ? report.fieldHints.slice(0, 40) : [];
+    diagnostics.geminiLastConversationId = report.conversationId || currentPageConversationId() || null;
+    diagnostics.readyReason = report.readyReason || "Gemini schema、历史聚合、顺序、candidate 和完整性尚未经过 live 验证";
+    diagnostics.lastDetectedKeys = Array.isArray(report.topLevelKeys) ? report.topLevelKeys.slice(0, 80) : [];
+    diagnostics.lastContentType = String(contentType || "");
+    diagnostics.lastResponsePath = safePath(responsePath);
+    if (report.possibleCandidate) {
+      diagnostics.lastCandidatePath = safePath(responsePath);
+      diagnostics.lastCandidateContentType = String(contentType || "");
+    }
+    const conversationRelated = Boolean(
+      report.possibleCandidate ||
+      (Array.isArray(report.fieldHints) && report.fieldHints.length) ||
+      report.paginationDetected ||
+      report.truncationDetected ||
+      (Array.isArray(report.branchSignals) && report.branchSignals.length)
+    );
+    if (!conversationRelated) {
+      publishStatus();
+      return;
+    }
+    const storedPayload = redactSensitiveFields(payload);
+    const cacheKey = `${diagnostics.lastResponsePath}|${rpcId || ""}|${report.structuralSignature || ""}|${report.possibleTurnCount || 0}|${payloadFingerprint(storedPayload)}`;
+    if (!geminiPayloadKeys.has(cacheKey)) {
+      geminiPayloadKeys.add(cacheKey);
+      geminiPayloadCache.push({
+        payload: storedPayload,
+        report,
+        conversationId: report.conversationId || currentPageConversationId(),
+        transport: String(transport || "unknown"),
+        contentType: String(contentType || ""),
+        responsePath: safePath(responsePath),
+        rpcId: rpcId || null,
+        capturedAt: new Date().toISOString()
+      });
+      while (geminiPayloadCache.length > 160) geminiPayloadCache.shift();
+    }
+    window.postMessage({
+      source: SOURCE,
+      type: "gemini-structure",
+      report: { ...report, platform, transport: String(transport || "unknown"), rpcId: rpcId || null },
+      payload: storedPayload,
+      contentType: String(contentType || ""),
+      responsePath: safePath(responsePath),
+      rpcId: rpcId || null
+    }, "*");
+    publishStatus();
+  }
+
+  function observePayload(payload, transport, contentType, responsePath, rpcId, topLevelShape) {
     diagnostics.jsonCandidates += 1;
     diagnostics.lastDetectedKeys = safeKeys(payload);
     diagnostics.lastContentType = String(contentType || "");
     if (responsePath) diagnostics.lastResponsePath = responsePath;
+    if (platform === "gemini") {
+      postGeminiStructure(payload, transport, contentType, responsePath, rpcId, topLevelShape);
+      return;
+    }
     const payloadSchema = schema(payload);
     if (payloadSchema.schemaType !== "none") {
       diagnostics.lastSchema = payloadSchema;
@@ -295,8 +445,39 @@
     }
   }
 
+  function observeStructuredText(text, transport, contentType, responsePath) {
+    if (platform !== "gemini" || !geminiAdapter || typeof geminiAdapter.parseStructuredTextReport !== "function") {
+      observeJsonText(text, transport, contentType, responsePath);
+      return;
+    }
+    const report = geminiAdapter.parseStructuredTextReport(text);
+    diagnostics.batchResponses += isGeminiBatchPath(responsePath) || report.recognizedEnvelope || report.lengthPrefixed ? 1 : 0;
+    diagnostics.batchFrames += Number(report.frameCount) || 0;
+    diagnostics.batchInnerPayloads += Number(report.innerPayloads) || 0;
+    diagnostics.batchParseFailures += Number(report.parseFailures) || 0;
+    if (Array.isArray(report.rpcIds)) diagnostics.batchRpcIds = Array.from(new Set(diagnostics.batchRpcIds.concat(report.rpcIds))).slice(-40);
+    const records = Array.isArray(report.payloadRecords) ? report.payloadRecords : [];
+    records.forEach((record) => postGeminiStructure(record.payload, transport, contentType, responsePath, record.rpcId, report.topLevelShape));
+    if (!records.length) {
+      diagnostics.jsonParseErrors += 1;
+      publishStatus();
+    }
+  }
+
   function observeStreamText(text, transport, contentType, responsePath) {
-    for (const line of String(text || "").split(/\r?\n/)) {
+    const raw = String(text || "");
+    if (platform === "gemini") {
+      let frameCount = 0;
+      for (const line of raw.split(/\r?\n/)) {
+        const match = /^data:\s*(.+)$/.exec(line);
+        if (!match || match[1] === "[DONE]") continue;
+        frameCount += 1;
+        observeStructuredText(match[1], transport, contentType, responsePath);
+      }
+      if (!frameCount) observeStructuredText(raw, transport, contentType, responsePath);
+      return;
+    }
+    for (const line of raw.split(/\r?\n/)) {
       const match = /^data:\s*(.+)$/.exec(line);
       if (!match || match[1] === "[DONE]") continue;
       observeJsonText(match[1], transport, contentType, responsePath);
@@ -316,10 +497,16 @@
     return typeof contentType === "string" && (contentType.includes("text/event-stream") || contentType.includes("ndjson"));
   }
 
+  function isInspectableGeminiResponse(contentType, responsePath) {
+    if (isGeminiBatchPath(responsePath) || !contentType) return true;
+    return isJsonContentType(contentType) || /^text\//i.test(String(contentType));
+  }
+
   if (typeof window.fetch === "function") {
     originalFetch = window.fetch;
     diagnostics.fetchHooked = true;
     window.fetch = function () {
+      captureAuthHeader(arguments[0], arguments[1]);
       diagnostics.fetchObserved += 1;
       publishStatus();
       return originalFetch.apply(this, arguments).then(function (response) {
@@ -327,7 +514,12 @@
           const contentType = response.headers && response.headers.get("content-type");
           const responsePath = rememberPath(response.url);
           diagnostics.lastContentType = String(contentType || "");
-          if (isJsonContentType(contentType) || !contentType) {
+          if (platform === "gemini" && !isStreamContentType(contentType) && isInspectableGeminiResponse(contentType, responsePath)) {
+            response.clone().text().then((text) => observeStructuredText(text, "fetch", contentType, responsePath)).catch(() => {
+              diagnostics.jsonParseErrors += 1;
+              publishStatus();
+            });
+          } else if (isJsonContentType(contentType) || !contentType) {
             response.clone().json().then((payload) => observePayload(payload, "fetch", contentType, responsePath)).catch(() => {
               diagnostics.jsonParseErrors += 1;
               publishStatus();
@@ -367,7 +559,10 @@
           const contentType = this.getResponseHeader("content-type") || "";
           const responsePath = rememberPath(this.responseURL || this.__CCE_REQUEST_URL__);
           diagnostics.lastContentType = String(contentType);
-          if (this.responseType === "json") {
+          if (platform === "gemini" && !isStreamContentType(contentType) && isInspectableGeminiResponse(contentType, responsePath)) {
+            const responseText = this.responseType === "json" ? JSON.stringify(this.response) : this.responseText;
+            observeStructuredText(responseText, "xhr", contentType, responsePath);
+          } else if (this.responseType === "json") {
             observePayload(this.response, "xhr", contentType, responsePath);
           } else if (isStreamContentType(contentType)) {
             diagnostics.streamResponses += 1;
@@ -388,6 +583,10 @@
     diagnostics.webSocketMessages += 1;
     const responsePath = "(WebSocket)";
     if (typeof data === "string") {
+      if (platform === "gemini") {
+        observeStructuredText(data, "websocket", "", responsePath);
+        return;
+      }
       try {
         observePayload(JSON.parse(data), "websocket", "", responsePath);
       } catch (_) {
@@ -432,6 +631,11 @@
   }
 
   function attemptVerifiedFallback() {
+    if (platform !== "chatgpt") {
+      diagnostics.fallbackSkipReason = "platform-not-configured";
+      publishStatus();
+      return;
+    }
     const config = fallbackConfig();
     const conversationId = currentPageConversationId();
     if (!config) {
@@ -517,36 +721,486 @@
     requestEndpoint(0);
   }
 
-  window.addEventListener("message", (event) => {
-    if (event.source !== window || !event.data || event.data.source !== SOURCE || event.data.type !== "rescan") return;
-    publishStatus();
-    for (const key of cacheOrder) {
-      if (cache.has(key)) post(cache.get(key), "cache-rescan", false);
+  let latestAuthToken = "";
+
+  function captureAuthHeader(input, init) {
+    try {
+      let auth = "";
+      if (init && init.headers) {
+        if (typeof init.headers.get === "function") auth = init.headers.get("authorization") || init.headers.get("Authorization");
+        else if (typeof init.headers === "object") auth = init.headers.authorization || init.headers.Authorization;
+      }
+      if (!auth && input && typeof input === "object" && input.headers && typeof input.headers.get === "function") {
+        auth = input.headers.get("authorization") || input.headers.get("Authorization");
+      }
+      if (typeof auth === "string" && auth.trim().toLowerCase().startsWith("bearer ")) {
+        latestAuthToken = auth.trim();
+      }
+    } catch (_) {}
+  }
+
+  /*
+   * Virtualizer bridge page scanner (Ported from GPT-Conversation-Toolkit under MIT License)
+   */
+  const REACT_PROPERTY_PREFIXES = [
+    "__reactFiber$",
+    "__reactProps$",
+    "__reactContainer$",
+    "__reactInternalInstance$",
+  ];
+
+  const PRIORITY_FIELDS = [
+    "stateNode",
+    "memoizedProps",
+    "memoizedState",
+    "ref",
+    "updateQueue",
+    "return",
+    "child",
+    "sibling",
+    "alternate",
+    "dependencies",
+  ];
+
+  const VIRTUALIZER_HINTS = [
+    "scrollToIndex",
+    "scrollToItem",
+    "scrollToOffset",
+    "getVirtualItems",
+    "getTotalSize",
+    "measureElement",
+    "followOutput",
+    "rangeChanged",
+    "firstItemIndex",
+    "atBottom",
+  ];
+
+  const VIRTUALIZER_START_SELECTOR = [
+    "#thread",
+    "main",
+    "[data-scroll-root]",
+    "section[data-turn]",
+    '[data-testid^="conversation-turn-"]',
+  ].join(", ");
+
+  let cachedVirtualizerApi = null;
+  let cachedVirtualizerAt = 0;
+  const VIRTUALIZER_CACHE_TTL_MS = 5000;
+  const MAX_SCAN_OBJECTS = 4200;
+  const MAX_SCAN_DEPTH = 8;
+  const MAX_GENERIC_KEYS_PER_OBJECT = 90;
+
+  function isObjectLike(value) {
+    return (typeof value === "object" || typeof value === "function") && value !== null;
+  }
+
+  function safeGet(object, key) {
+    try {
+      return object?.[key];
+    } catch (_) {
+      return undefined;
     }
-    for (const page of pageCache) {
-      if (page.conversationId === currentPageConversationId()) {
-        window.postMessage({
-          source: SOURCE,
-          type: "conversation-message-page",
-          conversationId: page.conversationId,
-          pageKey: page.key,
-          payload: page.payload,
-          transport: "cache-rescan",
-          responsePath: "(cache)"
-        }, "*");
+  }
+
+  function hasOwnFunction(object, key) {
+    return typeof safeGet(object, key) === "function";
+  }
+
+  function hasVirtualizerHint(object) {
+    return VIRTUALIZER_HINTS.some((key) => {
+      const value = safeGet(object, key);
+      return typeof value === "function" || typeof value === "boolean" || Number.isFinite(value);
+    });
+  }
+
+  function getPreferredMethod(object) {
+    if (hasOwnFunction(object, "scrollToIndex")) return "scrollToIndex";
+    if (hasOwnFunction(object, "scrollToItem")) return "scrollToItem";
+    if (hasOwnFunction(object, "scrollToOffset")) return "scrollToOffset";
+    return "";
+  }
+
+  function getVirtualizerScore(object) {
+    const method = getPreferredMethod(object);
+    if (!method) return 0;
+    const methodScore = method === "scrollToIndex" ? 300 : method === "scrollToItem" ? 200 : 100;
+    const hintScore = VIRTUALIZER_HINTS.reduce((score, key) => {
+      const value = safeGet(object, key);
+      return score + (typeof value === "function" || value !== undefined ? 1 : 0);
+    }, 0);
+    return methodScore + hintScore;
+  }
+
+  function getOwnKeys(object) {
+    try {
+      return [...Object.getOwnPropertyNames(object), ...Object.getOwnPropertySymbols(object)];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function isReactPropertyKey(key) {
+    return typeof key === "string" && REACT_PROPERTY_PREFIXES.some((prefix) => key.startsWith(prefix));
+  }
+
+  function getReactObjectsFromElement(element) {
+    if (!(element instanceof Element)) return [];
+    return getOwnKeys(element)
+      .filter(isReactPropertyKey)
+      .map((key) => safeGet(element, key))
+      .filter(isObjectLike);
+  }
+
+  function collectStartObjects() {
+    const starts = [];
+    const seenElements = new Set();
+    const addElement = (element) => {
+      if (!(element instanceof Element) || seenElements.has(element)) return;
+      seenElements.add(element);
+      getReactObjectsFromElement(element).forEach((value) => starts.push(value));
+    };
+
+    if (typeof document !== "undefined" && document.querySelectorAll) {
+      document.querySelectorAll(VIRTUALIZER_START_SELECTOR).forEach((element) => {
+        addElement(element);
+        let parent = element.parentElement;
+        let depth = 0;
+        while (parent instanceof Element && depth < 4) {
+          addElement(parent);
+          parent = parent.parentElement;
+          depth += 1;
+        }
+      });
+      if (document.documentElement) addElement(document.documentElement);
+      if (document.body) addElement(document.body);
+    }
+    return starts;
+  }
+
+  function shouldSkipGenericKey(key) {
+    const text = typeof key === "symbol" ? key.description || "" : String(key);
+    return (
+      text === "__proto__" ||
+      text === "constructor" ||
+      text === "prototype" ||
+      text === "ownerDocument" ||
+      text === "parentNode" ||
+      text === "children" ||
+      text === "childNodes" ||
+      text === "firstChild" ||
+      text === "lastChild" ||
+      text === "nextSibling" ||
+      text === "previousSibling" ||
+      text === "style" ||
+      text === "classList"
+    );
+  }
+
+  function isRelevantKey(key) {
+    const text = (typeof key === "symbol" ? key.description || "" : String(key)).toLowerCase();
+    return (
+      text.includes("virtual") ||
+      text.includes("scroll") ||
+      text.includes("list") ||
+      text.includes("range") ||
+      text.includes("index") ||
+      text.includes("item") ||
+      text.includes("ref") ||
+      text.includes("state") ||
+      text.includes("props")
+    );
+  }
+
+  function enqueueScanObject(queue, value, depth) {
+    if (isObjectLike(value) && depth <= MAX_SCAN_DEPTH) {
+      queue.push({ value, depth });
+    }
+  }
+
+  function scanObjectGraph(starts) {
+    const seen = new WeakSet();
+    const queue = [];
+    let best = null;
+    let bestScore = 0;
+    let scanned = 0;
+
+    starts.forEach((value) => enqueueScanObject(queue, value, 0));
+
+    while (queue.length > 0 && scanned < MAX_SCAN_OBJECTS) {
+      const { value, depth } = queue.shift();
+      if (!isObjectLike(value) || seen.has(value)) continue;
+      seen.add(value);
+      scanned += 1;
+
+      const score = getVirtualizerScore(value);
+      if (score > bestScore) {
+        bestScore = score;
+        best = {
+          api: value,
+          method: getPreferredMethod(value),
+          score,
+        };
+        if (best.method === "scrollToIndex" && score >= 305) {
+          break;
+        }
+      }
+
+      if (depth >= MAX_SCAN_DEPTH) continue;
+
+      PRIORITY_FIELDS.forEach((key) => {
+        const child = safeGet(value, key);
+        enqueueScanObject(queue, child, depth + 1);
+        if (key === "ref") {
+          enqueueScanObject(queue, safeGet(child, "current"), depth + 1);
+        }
+      });
+
+      const keys = getOwnKeys(value).slice(0, MAX_GENERIC_KEYS_PER_OBJECT);
+      keys.forEach((key) => {
+        if (shouldSkipGenericKey(key)) return;
+        const child = safeGet(value, key);
+        if (!isObjectLike(child)) return;
+        if (depth <= 2 || isRelevantKey(key) || hasVirtualizerHint(child)) {
+          enqueueScanObject(queue, child, depth + 1);
+        }
+      });
+    }
+
+    return best;
+  }
+
+  function clearCachedVirtualizerApi() {
+    cachedVirtualizerApi = null;
+    cachedVirtualizerAt = 0;
+  }
+
+  function findVirtualizerApi() {
+    const now = Date.now();
+    if (cachedVirtualizerApi && now - cachedVirtualizerAt < VIRTUALIZER_CACHE_TTL_MS) {
+      return cachedVirtualizerApi;
+    }
+    const starts = collectStartObjects();
+    const found = scanObjectGraph(starts);
+    cachedVirtualizerApi = found || null;
+    cachedVirtualizerAt = found ? now : 0;
+    return cachedVirtualizerApi;
+  }
+
+  async function tryCall(callback) {
+    const result = callback();
+    if (result && typeof result.then === "function") {
+      await result;
+    }
+  }
+
+  async function callScrollToIndex(api, index, options) {
+    const method = safeGet(api, "scrollToIndex");
+    const attempts = [
+      () => method.call(api, { index, ...options }),
+      () => method.call(api, index, options),
+      () => method.call(api, index)
+    ];
+    let lastError = null;
+    for (const attempt of attempts) {
+      try {
+        await tryCall(attempt);
+        return { ok: true, method: "scrollToIndex", attemptedIndex: index };
+      } catch (error) {
+        lastError = error;
       }
     }
-    const currentId = currentPageConversationId();
-    if (currentId && cache.has(currentId)) {
-      diagnostics.fallbackSkipReason = "captured-cache";
-      diagnostics.fallbackLastResult = "";
+    throw lastError || new Error("scrollToIndex_failed");
+  }
+
+  async function callScrollToItem(api, index) {
+    const method = safeGet(api, "scrollToItem");
+    const attempts = [
+      () => method.call(api, index, "center"),
+      () => method.call(api, index)
+    ];
+    let lastError = null;
+    for (const attempt of attempts) {
+      try {
+        await tryCall(attempt);
+        return { ok: true, method: "scrollToItem", attemptedIndex: index };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error("scrollToItem_failed");
+  }
+
+  async function callScrollToOffset(api, offset) {
+    const method = safeGet(api, "scrollToOffset");
+    await tryCall(() => method.call(api, offset));
+    return { ok: true, method: "scrollToOffset", attemptedIndex: null };
+  }
+
+  async function callVirtualizerApi(apiInfo, index, options) {
+    const api = apiInfo && apiInfo.api;
+    if (!api) return { ok: false, reason: "virtualizer_api_not_found" };
+    if (hasOwnFunction(api, "scrollToIndex")) {
+      return await callScrollToIndex(api, index, options);
+    }
+    if (hasOwnFunction(api, "scrollToItem")) {
+      return await callScrollToItem(api, index);
+    }
+    if (hasOwnFunction(api, "scrollToOffset") && Number.isFinite(options.offset)) {
+      return await callScrollToOffset(api, options.offset);
+    }
+    return { ok: false, reason: "virtualizer_api_not_found" };
+  }
+
+  async function fetchConversationMessagesPage(conversationId, cursor) {
+    const encodedId = encodeURIComponent(conversationId);
+    const path = cursor
+      ? `/backend-api/conversations/${encodedId}/messages?before=${encodeURIComponent(cursor)}&include_has_versions=true&num_turns=25`
+      : `/backend-api/conversations/${encodedId}/messages?include_has_versions=true&num_turns=25`;
+    const url = new URL(path, window.location.origin).toString();
+    const headers = { Accept: "application/json" };
+    if (latestAuthToken) {
+      headers.Authorization = latestAuthToken;
+    } else {
+      try {
+        const sessionRes = await (originalFetch || window.fetch).call(window, "/api/auth/session", {
+          credentials: "include",
+          headers: { Accept: "application/json" }
+        });
+        if (sessionRes && sessionRes.ok) {
+          const session = await sessionRes.json();
+          const token = session && (session.accessToken || session.access_token);
+          if (typeof token === "string" && token) {
+            latestAuthToken = `Bearer ${token}`;
+            headers.Authorization = latestAuthToken;
+          }
+        }
+      } catch (_) {}
+    }
+
+    const response = await (originalFetch || window.fetch).call(window, url, {
+      method: "GET",
+      credentials: "include",
+      headers
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return await response.json();
+  }
+
+  window.addEventListener("message", async (event) => {
+    if (event.source !== window || !event.data || event.data.source !== SOURCE) return;
+    const type = event.data.type;
+
+    if (type === "rescan") {
       publishStatus();
+      for (const key of cacheOrder) {
+        if (cache.has(key)) post(cache.get(key), "cache-rescan", false);
+      }
+      for (const page of pageCache) {
+        if (page.conversationId === currentPageConversationId()) {
+          window.postMessage({
+            source: SOURCE,
+            type: "conversation-message-page",
+            conversationId: page.conversationId,
+            pageKey: page.key,
+            payload: page.payload,
+            transport: "cache-rescan",
+            responsePath: "(cache)"
+          }, "*");
+        }
+      }
+      if (platform === "gemini") {
+        const currentId = currentPageConversationId();
+        for (const record of geminiPayloadCache) {
+          if (record.conversationId && currentId && record.conversationId !== currentId) continue;
+          postGeminiStructure(record.payload, "cache-rescan", record.contentType, record.responsePath, record.rpcId, record.report && record.report.topLevelShape);
+        }
+        publishStatus();
+        return;
+      }
+      const currentId = currentPageConversationId();
+      if (currentId && cache.has(currentId)) {
+        diagnostics.fallbackSkipReason = "captured-cache";
+        diagnostics.fallbackLastResult = "";
+        publishStatus();
+        return;
+      }
+      // A rescan is an explicit request to refresh the current conversation.
+      // If the page response was already captured, prefer that original payload;
+      // otherwise try the verified adapter.
+      attemptVerifiedFallback();
       return;
     }
-    // A rescan is an explicit request to refresh the current conversation.
-    // If the page response was already captured, prefer that original payload;
-    // otherwise try the verified adapter.
-    attemptVerifiedFallback();
+
+    if (type === "navigator-virtualizer-scroll") {
+      const requestId = event.data.requestId || "";
+      const rawCandidates = Array.isArray(event.data.candidates) ? event.data.candidates : [event.data.index];
+      const candidates = [];
+      rawCandidates.forEach((c) => {
+        const num = Number(c);
+        if (Number.isFinite(num) && num >= 0 && !candidates.includes(Math.trunc(num))) {
+          candidates.push(Math.trunc(num));
+        }
+      });
+
+      if (!requestId || candidates.length === 0) {
+        window.postMessage({ source: SOURCE, type: "navigator-virtualizer-scroll-result", requestId, ok: false, reason: "invalid_index" }, "*");
+        return;
+      }
+
+      let apiInfo = findVirtualizerApi();
+      if (!apiInfo) {
+        window.postMessage({ source: SOURCE, type: "navigator-virtualizer-scroll-result", requestId, ok: false, reason: "virtualizer_api_not_found" }, "*");
+        return;
+      }
+
+      const options = { align: event.data.options?.align || "center", behavior: "auto" };
+      let lastReason = "";
+      for (const index of candidates) {
+        try {
+          const result = await callVirtualizerApi(apiInfo, index, options);
+          if (result && result.ok) {
+            window.postMessage({
+              source: SOURCE,
+              type: "navigator-virtualizer-scroll-result",
+              requestId,
+              ok: true,
+              method: result.method || "",
+              attemptedIndex: result.attemptedIndex,
+              reason: ""
+            }, "*");
+            return;
+          }
+          lastReason = result ? result.reason : "call_failed";
+        } catch (err) {
+          lastReason = err && err.message ? err.message : "call_failed";
+          clearCachedVirtualizerApi();
+          apiInfo = findVirtualizerApi();
+          if (!apiInfo) break;
+        }
+      }
+
+      window.postMessage({ source: SOURCE, type: "navigator-virtualizer-scroll-result", requestId, ok: false, reason: lastReason || "virtualizer_scroll_failed" }, "*");
+      return;
+    }
+
+    if (type === "navigator-fetch-messages-page") {
+      const requestId = event.data.requestId || "";
+      const conversationId = event.data.conversationId || "";
+      const cursor = event.data.cursor || "";
+      if (!requestId || !conversationId) {
+        window.postMessage({ source: SOURCE, type: "navigator-fetch-messages-page-result", requestId, ok: false, error: "missing_parameters" }, "*");
+        return;
+      }
+      try {
+        const payload = await fetchConversationMessagesPage(conversationId, cursor);
+        window.postMessage({ source: SOURCE, type: "navigator-fetch-messages-page-result", requestId, ok: true, payload }, "*");
+      } catch (err) {
+        window.postMessage({ source: SOURCE, type: "navigator-fetch-messages-page-result", requestId, ok: false, error: err && err.message ? err.message : String(err) }, "*");
+      }
+      return;
+    }
   });
 
   publishStatus();
