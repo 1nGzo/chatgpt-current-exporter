@@ -3,31 +3,79 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ChatGPT 当前会话导出器</title>
+    <title>Current Conversation Exporter</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
-    <main>
-      <h1>当前会话导出器</h1>
-      <div id="state">读取当前标签页…</div>
-      <dl>
-        <dt>Conversation ID</dt><dd id="conversation-id">—</dd>
-        <dt>Title</dt><dd id="conversation-title">—</dd>
-        <dt>Captured</dt><dd id="captured">—</dd>
-        <dt>Stats</dt><dd id="stats">—</dd>
-      </dl>
-      <fieldset id="export-format" disabled>
-        <legend>导出格式</legend>
-        <div class="format-options">
-          <label><input type="radio" name="exportFormat" value="markdown" checked><span>Markdown</span></label>
-          <label><input type="radio" name="exportFormat" value="json"><span>JSON</span></label>
-          <label><input type="radio" name="exportFormat" value="both"><span>两者</span></label>
+    <main class="popup-shell">
+      <header class="popup-header">
+        <div class="header-top">
+          <h1 class="popup-title">Current Conversation Exporter</h1>
+          <span id="platform" class="platform-tag">—</span>
         </div>
-      </fieldset>
-      <button id="export" type="button">导出当前会话</button>
-      <button id="rescan" type="button" class="secondary">重新扫描当前页面</button>
-      <pre id="diagnostics">—</pre>
-      <p class="hint">数据只在本地处理；扩展不读取或保存 Cookie、Authorization、token 或密码。</p>
+        <div class="status-badge" id="status-container">
+          <span class="status-dot" aria-hidden="true"></span>
+          <div id="state">读取当前标签页…</div>
+        </div>
+      </header>
+
+      <section class="meta-card">
+        <div class="meta-row">
+          <span class="meta-key">Title</span>
+          <span id="conversation-title" class="meta-val">—</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-key">ID</span>
+          <span id="conversation-id" class="meta-val mono">—</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-key">Captured</span>
+          <span id="captured" class="meta-val">—</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-key">Stats</span>
+          <span id="stats" class="meta-val mono">—</span>
+        </div>
+      </section>
+
+      <section class="action-card">
+        <fieldset id="export-format" class="format-fieldset" disabled>
+          <legend class="format-legend">导出格式</legend>
+          <div class="format-options">
+            <label class="format-option">
+              <input type="radio" name="exportFormat" value="markdown" checked>
+              <span class="option-label">Markdown</span>
+            </label>
+            <label class="format-option">
+              <input type="radio" name="exportFormat" value="json">
+              <span class="option-label">JSON</span>
+            </label>
+            <label class="format-option">
+              <input type="radio" name="exportFormat" value="both">
+              <span class="option-label">两者</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <button id="export" type="button" class="btn-primary" disabled>导出当前会话</button>
+      </section>
+
+      <details class="diagnostics-details">
+        <summary class="diagnostics-summary">
+          <span>诊断信息 (Diagnostics)</span>
+        </summary>
+        <div class="diagnostics-panel">
+          <div class="diagnostics-toolbar">
+            <button id="rescan" type="button" class="btn-ghost">重新扫描页面</button>
+            <button id="debug-bundle" type="button" class="btn-ghost" disabled>Debug Bundle</button>
+          </div>
+          <pre id="diagnostics">—</pre>
+        </div>
+      </details>
+
+      <footer class="popup-footer">
+        <p class="hint">本地处理 · 无外部网络传输</p>
+      </footer>
     </main>
     <script src="popup.js"></script>
   </body>

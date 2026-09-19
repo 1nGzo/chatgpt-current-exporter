@@ -116,6 +116,8 @@
   let currentId = currentConversationId();
   let lastError = "";
   let panel = null;
+  let quickExport = null;
+  let dotHistory = null;
   const namingConfigReady = loadLocalNamingConfig();
 
   function loadLocalNamingConfig() {
@@ -620,19 +622,10 @@
   }
 
   function updatePanel() {
-    if (!panel) return;
     const snapshot = status();
-    panel.state.textContent = lastError || (snapshot.state === "Ready" ? "Ready（捕获结构化响应；完整性仍需实际验证）" : snapshot.state === "Review" ? "Review（有未识别字段，请检查诊断）" : snapshot.state === "Waiting" ? "Waiting：刷新会话后等待结构化响应" : "Error");
-    if (panel.platform) panel.platform.textContent = text(snapshot.platformLabel || platformDefinition.label);
-    panel.id.textContent = text(snapshot.conversationId);
-    panel.title.textContent = text(snapshot.title);
-    panel.detail.textContent = snapshot.captured
-      ? `mapping ${snapshot.mappingNodes} · active path ${snapshot.activePathNodes} · messages ${snapshot.activePathMessages} · raw ${snapshot.rawJsonSize} bytes`
-      : snapshot.platform === "gemini"
-        ? `responses ${snapshot.diagnostics.geminiResponseCount || 0} · candidate turns ${snapshot.diagnostics.possibleTotalTurns || 0} · completeness ${snapshot.diagnostics.completeness || "WAITING"}`
-        : snapshot.readyReason;
-    panel.button.disabled = !snapshot.captured || snapshot.incompleteReasons.length > 0 || snapshot.activePathMessages === 0;
-    if (panel.debugButton) panel.debugButton.disabled = platformId !== "gemini" || !snapshot.debugBundleAvailable;
+    if (quickExport && typeof quickExport.update === "function") {
+      quickExport.update(snapshot);
+    }
   }
 
   function downloadText(filename, content, mimeType) {
@@ -740,6 +733,9 @@
         geminiRecords.length = 0;
         geminiRecordKeys.clear();
       }
+      if (platformId === "chatgpt" && !dotHistory) {
+        buildDotHistoryUI();
+      }
     }
     const aggregateOnlyKeys = new Set(["candidateResponses", "candidateUserTurns", "candidateAssistantTurns", "normalizedUserTurns", "normalizedAssistantTurns", "possibleTotalTurns", "topLevelShape", "structuralSignature", "paginationDetected", "truncationDetected", "branchSelection", "completeness", "readyReason", "geminiConversationCandidates", "geminiLastTopLevelKeys", "geminiLastWrapperDepth", "geminiLastTurnCount", "geminiLastUserMessages", "geminiLastAssistantMessages", "geminiPaginationDetected", "geminiPaginationSignals", "geminiPaginationPossible", "geminiTruncationDetected", "geminiTruncationSignals", "geminiCompleteness", "geminiSchemaVerified", "geminiOrderingValidated", "geminiSchemaVariant", "geminiBranchSelection", "geminiLastFieldHints", "geminiLastConversationId", "geminiResponseCount", "geminiLastRpcId", "geminiLastCandidatePath", "geminiLastCandidateContentType", "geminiRpcSummaries"]);
     for (const key of ["injected", "fetchObserved", "xhrObserved", "jsonCandidates", "conversationCandidates", "jsonParseErrors", "streamResponses", "webSocketObserved", "webSocketMessages", "conversationEndpointObserved", "currentConversationEndpointResponses", "fallbackAttempts", "fallbackResponses", "fallbackConversationCandidates", "fallbackLastResult", "fallbackConfigured", "fallbackSkipReason", "fallbackLastEndpoint", "messagePageResponses", "messagePageCandidates", "messagePagePreviousTrue", "messagePagePreviousFalse", "messagePagePreviousUnknown", "messagePageNextTrue", "messagePageNextFalse", "messagePageNextUnknown", "cachedMessagePages", "lastMessagePageKeys", "lastContentType", "lastResponsePath", "observedResponsePaths", "cacheSize", "fetchHooked", "xhrHooked", "lastCandidatePath", "lastCandidateContentType"]) {
@@ -770,85 +766,754 @@
     updatePanel();
   }
 
-  function buildPanel() {
-    if (panel || !document.documentElement) return;
+  // --- Theme Management ---
+  function detectTheme() {
+    const html = document.documentElement;
+    const body = document.body;
+    const explicit = html?.getAttribute("data-theme") || body?.getAttribute("data-theme");
+    if (explicit === "dark" || explicit === "light") return explicit;
+    if (html?.classList.contains("dark") || body?.classList.contains("dark")) return "dark";
+    if (html?.classList.contains("light") || body?.classList.contains("light")) return "light";
+    try {
+      const bg = window.getComputedStyle(body || html).backgroundColor;
+      const match = bg.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+      if (match) {
+        const lum = (0.2126 * match[1] + 0.7152 * match[2] + 0.0722 * match[3]) / 255;
+        return lum < 0.5 ? "dark" : "light";
+      }
+    } catch (_) {}
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+
+  function applyThemeToRoots() {
+    const theme = detectTheme();
+    const addClass = theme === "dark" ? "cce-theme-dark" : "cce-theme-light";
+    const removeClass = theme === "dark" ? "cce-theme-light" : "cce-theme-dark";
+    if (quickExport && quickExport.root) {
+      quickExport.root.classList.remove(removeClass);
+      quickExport.root.classList.add(addClass);
+    }
+    if (dotHistory && dotHistory.root) {
+      dotHistory.root.classList.remove(removeClass);
+      dotHistory.root.classList.add(addClass);
+    }
+  }
+
+  function initThemeSync() {
+    applyThemeToRoots();
+    const observer = new MutationObserver(() => applyThemeToRoots());
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
+    if (document.body) {
+      observer.observe(document.body, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
+    }
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    if (media && media.addEventListener) media.addEventListener("change", applyThemeToRoots);
+  }
+
+  // --- In-Page Quick Export UI ---
+  function buildQuickExportUI() {
+    if (quickExport || !document.documentElement) return;
     const host = document.createElement("div");
-    host.id = "cce-exporter-host";
-    host.dataset.open = "false";
-    host.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647";
+    host.id = "cce-quick-export-host";
+    host.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483645;pointer-events:none;";
     const shadow = host.attachShadow({ mode: "open" });
     shadow.innerHTML = `
       <style>
-        :host { all: initial; font-family: system-ui, sans-serif; }
-        .shell { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-        .launcher { width: auto; min-width: 44px; padding: 8px 11px; color: #fff; background: #10a37f; border: 0; border-radius: 999px; box-shadow: 0 4px 14px #0005; cursor: pointer; font: 700 12px/1.2 system-ui, sans-serif; }
-        .launcher:hover { background: #0d8f70; }
-        .launcher:focus-visible, button:focus-visible { outline: 2px solid #8bd5ff; outline-offset: 2px; }
-        .box { display: none; width: min(310px, calc(100vw - 32px)); color: #f5f5f5; background: #202123; border: 1px solid #565869; border-radius: 10px; box-shadow: 0 6px 24px #0008; padding: 12px; font-size: 12px; }
-        :host([data-open="true"]) .box { display: block; }
-        .header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-        .title { font-weight: 700; }
-        .close { width: auto; padding: 2px 7px; color: #c5c5d2; background: transparent; border: 0; border-radius: 5px; cursor: pointer; font: 700 16px/1 system-ui, sans-serif; }
-        .close:hover { color: #fff; background: #565869; }
-        .state { color: #9bd6a4; margin-bottom: 6px; }
-        .meta { color: #c5c5d2; word-break: break-word; line-height: 1.45; }
-        .detail { color: #aab; margin: 7px 0; line-height: 1.4; }
-        .box > .export, .box > .secondary { width: 100%; padding: 8px; color: #fff; background: #10a37f; border: 0; border-radius: 6px; cursor: pointer; font: 700 12px/1.2 system-ui, sans-serif; }
-        .box button.secondary { margin-top: 6px; background: #565869; }
-        .box button:hover:not(:disabled) { background: #0d8f70; }
-        .box button.secondary:hover:not(:disabled) { background: #6b6d80; }
-        button:disabled { color: #aaa; background: #555; cursor: not-allowed; }
+        :host { all: initial; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+        * { box-sizing: border-box; }
+        .cce-quick-shell { pointer-events: auto; display: flex; flex-direction: column; align-items: flex-end; }
+        .cce-theme-light {
+          --cce-bg: rgba(255, 255, 255, 0.96);
+          --cce-surface-hover: #f0f0f0;
+          --cce-border: rgba(0, 0, 0, 0.1);
+          --cce-border-subtle: rgba(0, 0, 0, 0.06);
+          --cce-text-primary: #0d0d0d;
+          --cce-text-secondary: #5d5d5d;
+          --cce-text-tertiary: #8e8e8e;
+          --cce-shadow-pill: 0 2px 8px rgba(0, 0, 0, 0.06);
+          --cce-shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.1);
+        }
+        .cce-theme-dark {
+          --cce-bg: rgba(33, 33, 33, 0.96);
+          --cce-surface-hover: #383838;
+          --cce-border: rgba(255, 255, 255, 0.12);
+          --cce-border-subtle: rgba(255, 255, 255, 0.08);
+          --cce-text-primary: #ececec;
+          --cce-text-secondary: #b4b4b4;
+          --cce-text-tertiary: #737373;
+          --cce-shadow-pill: 0 2px 10px rgba(0, 0, 0, 0.3);
+          --cce-shadow-menu: 0 6px 20px rgba(0, 0, 0, 0.4);
+        }
+        .cce-quick-pill {
+          display: inline-flex;
+          align-items: center;
+          height: 32px;
+          background: var(--cce-bg);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          border: 1px solid var(--cce-border);
+          border-radius: 8px;
+          box-shadow: var(--cce-shadow-pill);
+          overflow: hidden;
+          transition: border-color 150ms ease, box-shadow 150ms ease;
+        }
+        .cce-quick-pill:hover { border-color: var(--cce-text-tertiary); }
+        .cce-quick-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          height: 100%;
+          padding: 0 10px;
+          border: 0;
+          background: transparent;
+          color: var(--cce-text-primary);
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          user-select: none;
+          transition: background-color 150ms ease;
+        }
+        .cce-quick-btn:hover:not(:disabled) { background: var(--cce-surface-hover); }
+        .cce-quick-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .cce-quick-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+        .cce-format-trigger {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          height: 100%;
+          padding: 0 7px;
+          border: 0;
+          border-left: 1px solid var(--cce-border-subtle);
+          background: transparent;
+          color: var(--cce-text-secondary);
+          font-size: 10.5px;
+          font-weight: 600;
+          cursor: pointer;
+          user-select: none;
+          transition: background-color 150ms ease, color 150ms ease;
+        }
+        .cce-format-trigger:hover { background: var(--cce-surface-hover); color: var(--cce-text-primary); }
+        .cce-format-trigger svg { width: 9px; height: 9px; transition: transform 150ms ease; }
+        .cce-format-trigger[aria-expanded="true"] svg { transform: rotate(180deg); }
+        .cce-format-menu {
+          position: absolute;
+          bottom: 38px;
+          right: 0;
+          min-width: 135px;
+          background: var(--cce-bg);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          border: 1px solid var(--cce-border);
+          border-radius: 8px;
+          box-shadow: var(--cce-shadow-menu);
+          padding: 4px;
+          display: none;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .cce-format-menu.is-open { display: flex; }
+        .cce-format-item, .cce-debug-item {
+          width: 100%;
+          padding: 6px 8px;
+          border: 0;
+          border-radius: 6px;
+          background: transparent;
+          color: var(--cce-text-primary);
+          font-size: 11.5px;
+          font-weight: 400;
+          text-align: left;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          transition: background-color 120ms ease;
+        }
+        .cce-format-item:hover, .cce-debug-item:hover { background: var(--cce-surface-hover); }
+        .cce-format-item.is-selected { font-weight: 600; }
+        .cce-format-item.is-selected::after { content: "✓"; font-size: 11px; }
       </style>
-      <div class="shell">
-        <section class="box" role="dialog" aria-label="Current Conversation Exporter">
-          <div class="header">
-            <div class="title">Current Conversation Exporter</div>
-            <button class="close" type="button" aria-label="关闭导出器">×</button>
-          </div>
-          <div class="state"></div>
-          <div class="meta">Platform: <span class="platform"></span></div>
-          <div class="meta">Conversation ID: <span class="id"></span></div>
-          <div class="meta">Title: <span class="conversation-title"></span></div>
-          <div class="detail"></div>
-          <button class="export" type="button">导出当前会话</button>
-          <button class="debug secondary" type="button">Export Debug Structure</button>
-        </section>
-        <button class="launcher" type="button" aria-expanded="false" aria-controls="cce-exporter-panel" aria-label="打开 ChatGPT 当前会话导出器">导出器</button>
+      <div class="cce-quick-shell cce-theme-light">
+        <div class="cce-quick-pill">
+          <button class="cce-quick-btn" type="button" aria-label="导出当前会话" title="导出当前会话" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span class="cce-quick-label">导出</span>
+          </button>
+          <button class="cce-format-trigger" type="button" aria-label="选择导出格式" aria-expanded="false" title="选择格式">
+            <span class="cce-format-badge">MD</span>
+            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M3 4.5l3 3 3-3"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="cce-format-menu" role="menu" aria-hidden="true">
+          <button class="cce-format-item" data-format="markdown" type="button" role="menuitem">Markdown</button>
+          <button class="cce-format-item" data-format="json" type="button" role="menuitem">JSON</button>
+          <button class="cce-format-item" data-format="both" type="button" role="menuitem">两者 (MD+JSON)</button>
+          <button class="cce-debug-item" type="button" role="menuitem" style="display:none;">Debug Bundle</button>
+        </div>
       </div>`;
-    const box = {
-      state: shadow.querySelector(".state"),
-      platform: shadow.querySelector(".platform"),
-      id: shadow.querySelector(".id"),
-      title: shadow.querySelector(".conversation-title"),
-      detail: shadow.querySelector(".detail"),
-      button: shadow.querySelector(".export"),
-      debugButton: shadow.querySelector(".debug"),
-      close: shadow.querySelector(".close"),
-      launcher: shadow.querySelector(".launcher")
-    };
-    const panelBox = shadow.querySelector(".box");
-    panelBox.id = "cce-exporter-panel";
-    function setOpen(open) {
-      host.dataset.open = open ? "true" : "false";
-      box.launcher.setAttribute("aria-expanded", open ? "true" : "false");
-      if (open) box.close.focus();
+
+    const root = shadow.querySelector(".cce-quick-shell");
+    const btn = shadow.querySelector(".cce-quick-btn");
+    const label = shadow.querySelector(".cce-quick-label");
+    const formatTrigger = shadow.querySelector(".cce-format-trigger");
+    const formatBadge = shadow.querySelector(".cce-format-badge");
+    const formatMenu = shadow.querySelector(".cce-format-menu");
+    const formatItems = Array.from(shadow.querySelectorAll(".cce-format-item"));
+    const debugItem = shadow.querySelector(".cce-debug-item");
+
+    let currentFormat = "markdown";
+    const formatLabels = { markdown: "MD", json: "JSON", both: "All" };
+
+    function syncFormatSelection(format) {
+      currentFormat = ["markdown", "json", "both"].includes(format) ? format : "markdown";
+      formatBadge.textContent = formatLabels[currentFormat] || "MD";
+      formatItems.forEach((it) => it.classList.toggle("is-selected", it.dataset.format === currentFormat));
     }
-    const rescanButton = document.createElement("button");
-    rescanButton.type = "button";
-    rescanButton.textContent = "重新扫描当前页面";
-    rescanButton.className = "secondary";
-    rescanButton.addEventListener("click", requestRescan);
-    panelBox.appendChild(rescanButton);
-    box.button.addEventListener("click", exportCurrent);
-    box.debugButton.addEventListener("click", exportGeminiDebugBundle);
-    box.launcher.addEventListener("click", () => setOpen(host.dataset.open !== "true"));
-    box.close.addEventListener("click", () => {
-      setOpen(false);
-      box.launcher.focus();
+
+    chrome.storage.local.get({ exportFormat: "markdown" }).then(({ exportFormat }) => {
+      syncFormatSelection(exportFormat);
+      updatePanel();
+    }).catch(() => {});
+
+    function closeFormatMenu() {
+      formatMenu.classList.remove("is-open");
+      formatTrigger.setAttribute("aria-expanded", "false");
+    }
+
+    function toggleFormatMenu() {
+      const open = formatMenu.classList.toggle("is-open");
+      formatTrigger.setAttribute("aria-expanded", String(open));
+    }
+
+    formatTrigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleFormatMenu();
     });
+
+    formatItems.forEach((item) => {
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const nextFmt = item.dataset.format;
+        chrome.storage.local.set({ exportFormat: nextFmt });
+        syncFormatSelection(nextFmt);
+        closeFormatMenu();
+        updatePanel();
+      });
+    });
+
+    if (debugItem) {
+      debugItem.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeFormatMenu();
+        exportGeminiDebugBundle();
+      });
+    }
+
+    document.addEventListener("click", (e) => {
+      if (!host.contains(e.target)) closeFormatMenu();
+    });
+
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      closeFormatMenu();
+      if (btn.disabled) return;
+      btn.disabled = true;
+      const prevText = label.textContent;
+      label.textContent = "导出中…";
+      try {
+        const result = await exportCurrent();
+        if (result && result.ok) {
+          label.textContent = "已导出 ✓";
+          setTimeout(() => {
+            label.textContent = prevText;
+            updatePanel();
+          }, 1500);
+        } else {
+          label.textContent = "导出失败";
+          btn.title = (result && result.error) || "导出失败";
+          setTimeout(() => {
+            label.textContent = prevText;
+            updatePanel();
+          }, 2000);
+        }
+      } catch (err) {
+        label.textContent = "导出失败";
+        btn.title = (err && err.message) || String(err);
+        setTimeout(() => {
+          label.textContent = prevText;
+          updatePanel();
+        }, 2000);
+      }
+    });
+
+    quickExport = {
+      root,
+      btn,
+      label,
+      debugItem,
+      update: (snapshot) => {
+        const ready = snapshot.captured && snapshot.incompleteReasons.length === 0 && snapshot.activePathMessages > 0;
+        btn.disabled = !ready;
+        btn.title = ready ? `导出当前会话 (${formatLabels[currentFormat] || "MD"})` : (lastError || snapshot.readyReason || "等待捕获会话数据…");
+        if (debugItem) {
+          debugItem.style.display = platformId === "gemini" && snapshot.debugBundleAvailable ? "flex" : "none";
+        }
+      }
+    };
+
     document.documentElement.appendChild(host);
-    panel = box;
-    updatePanel();
+    applyThemeToRoots();
+  }
+
+  // --- Dot History Navigator UI (ChatGPT only) ---
+  function buildDotHistoryUI() {
+    if (dotHistory || platformId !== "chatgpt" || !navigatorBackend || !document.documentElement) return;
+
+    const host = document.createElement("div");
+    host.id = "cce-dot-history-host";
+    host.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483646;";
+    const shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML = `
+      <style>
+        :host { all: initial; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+        * { box-sizing: border-box; }
+        .cce-theme-light {
+          --cce-bg: #ffffff;
+          --cce-border: rgba(0, 0, 0, 0.08);
+          --cce-text-primary: #0d0d0d;
+          --cce-text-secondary: #5d5d5d;
+          --cce-text-tertiary: #8e8e8e;
+          --cce-handle-hover: rgba(0, 0, 0, 0.06);
+          --cce-dot-muted: rgba(0, 0, 0, 0.25);
+          --cce-dot-active: #0d0d0d;
+          --cce-shadow-popover: 0 4px 16px rgba(0, 0, 0, 0.08);
+        }
+        .cce-theme-dark {
+          --cce-bg: #262626;
+          --cce-border: rgba(255, 255, 255, 0.1);
+          --cce-text-primary: #ececec;
+          --cce-text-secondary: #b4b4b4;
+          --cce-text-tertiary: #737373;
+          --cce-handle-hover: rgba(255, 255, 255, 0.08);
+          --cce-dot-muted: rgba(255, 255, 255, 0.28);
+          --cce-dot-active: #ececec;
+          --cce-shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.35);
+        }
+        .cce-dot-shell { pointer-events: none; width: 100%; height: 100%; position: relative; }
+        .cce-dot-handle {
+          position: fixed;
+          width: 44px;
+          height: 32px;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          background: transparent;
+          color: var(--cce-text-tertiary);
+          cursor: grab;
+          z-index: 2147483647;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          touch-action: none;
+          pointer-events: auto;
+          user-select: none;
+          transition: background-color 150ms ease, color 150ms ease;
+        }
+        .cce-dot-handle:hover,
+        .cce-dot-handle[aria-expanded="true"] {
+          background: var(--cce-handle-hover);
+          color: var(--cce-text-secondary);
+        }
+        .cce-dot-handle.is-dragging { cursor: grabbing; transition: none; }
+        .cce-dot-handle:focus-visible { outline: 1px solid var(--cce-text-secondary); outline-offset: 1px; }
+        .cce-dot-handle-mark { display: flex; gap: 7px; align-items: center; }
+        .cce-dot-handle-mark i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; display: block; }
+        .cce-dot-timeline {
+          position: fixed;
+          width: 44px;
+          z-index: 2147483646;
+          pointer-events: auto;
+          user-select: none;
+          transition: opacity 150ms ease;
+        }
+        .cce-dot-timeline.is-hidden { display: none; }
+        .cce-dot-track {
+          height: 100%;
+          width: 100%;
+          overflow-y: auto;
+          overflow-x: hidden;
+          overscroll-behavior: contain;
+          scrollbar-width: none;
+        }
+        .cce-dot-track::-webkit-scrollbar { display: none; }
+        .cce-dot-content { position: relative; width: 100%; }
+        .cce-dot-node {
+          position: absolute;
+          left: 50%;
+          width: 28px;
+          height: 28px;
+          transform: translate(-50%, -50%);
+          padding: 0;
+          border: 0;
+          border-radius: 50%;
+          background: transparent;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .cce-dot {
+          width: 4px;
+          height: 4px;
+          border-radius: 50%;
+          background: var(--cce-dot-muted);
+          transition: transform 150ms ease, background-color 150ms ease;
+          pointer-events: none;
+        }
+        .cce-dot-node:hover .cce-dot,
+        .cce-dot-node:focus-visible .cce-dot {
+          background: var(--cce-dot-active);
+          transform: scale(1.4);
+        }
+        .cce-dot-node.is-active .cce-dot {
+          background: var(--cce-dot-active);
+          transform: scale(1.75);
+        }
+        .cce-dot-node:focus-visible { outline: 1px solid var(--cce-text-secondary); outline-offset: 1px; }
+        .cce-dot-preview {
+          position: absolute;
+          right: 48px;
+          left: auto;
+          width: max-content;
+          max-width: min(260px, calc(100vw - 76px));
+          box-sizing: border-box;
+          border: 1px solid var(--cce-border);
+          border-radius: 8px;
+          padding: 8px 10px;
+          font-size: 12px;
+          line-height: 1.45;
+          overflow-wrap: anywhere;
+          color: var(--cce-text-primary);
+          background: var(--cce-bg);
+          box-shadow: var(--cce-shadow-popover);
+          opacity: 0;
+          visibility: hidden;
+          pointer-events: none;
+          transition: opacity 120ms ease;
+          z-index: 2147483647;
+        }
+        .cce-dot-preview.is-visible { opacity: 1; visibility: visible; }
+        .cce-dot-timeline.is-flipped .cce-dot-preview { left: 48px; right: auto; }
+      </style>
+      <div class="cce-dot-shell cce-theme-light">
+        <button class="cce-dot-handle" type="button" aria-label="Toggle prompt history" aria-expanded="false" title="Prompt History">
+          <span class="cce-dot-handle-mark" aria-hidden="true">
+            <i></i><i></i><i></i>
+          </span>
+        </button>
+        <div class="cce-dot-timeline is-hidden" aria-label="Prompt Timeline">
+          <div class="cce-dot-track">
+            <div class="cce-dot-content"></div>
+          </div>
+          <div class="cce-dot-preview" role="tooltip"></div>
+        </div>
+      </div>`;
+
+    const root = shadow.querySelector(".cce-dot-shell");
+    const handle = shadow.querySelector(".cce-dot-handle");
+    const timeline = shadow.querySelector(".cce-dot-timeline");
+    const track = shadow.querySelector(".cce-dot-track");
+    const content = shadow.querySelector(".cce-dot-content");
+    const preview = shadow.querySelector(".cce-dot-preview");
+
+    let isExpanded = false;
+    let initializedForCurrent = false;
+    let currentItems = [];
+    let activeIndex = -1;
+
+    function clampPosition(left, top) {
+      const maxLeft = Math.max(8, window.innerWidth - 44 - 8);
+      const maxTop = Math.max(8, window.innerHeight - 32 - 8);
+      return {
+        left: Math.max(8, Math.min(maxLeft, left)),
+        top: Math.max(8, Math.min(maxTop, top))
+      };
+    }
+
+    function applyHandlePosition(left, top) {
+      const clamped = clampPosition(left, top);
+      handle.style.left = `${clamped.left}px`;
+      handle.style.top = `${clamped.top}px`;
+      handle.style.right = "auto";
+      updateTimelinePosition();
+    }
+
+    const defaultLeft = window.innerWidth - 44 - 16;
+    const defaultTop = (window.innerHeight - 32) / 2;
+    applyHandlePosition(defaultLeft, defaultTop);
+
+    chrome.storage.local.get({ cce_dot_position: null }).then(({ cce_dot_position }) => {
+      if (cce_dot_position && typeof cce_dot_position.left === "number" && typeof cce_dot_position.top === "number") {
+        applyHandlePosition(cce_dot_position.left, cce_dot_position.top);
+      }
+    }).catch(() => {});
+
+    let isDragging = false;
+    let hasMoved = false;
+    let startX = 0, startY = 0;
+    let startLeft = 0, startTop = 0;
+    let curLeft = 0, curTop = 0;
+
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = handle.getBoundingClientRect();
+      startLeft = rect.left;
+      startTop = rect.top;
+      curLeft = startLeft;
+      curTop = startTop;
+      isDragging = true;
+      hasMoved = false;
+      handle.setPointerCapture(e.pointerId);
+    });
+
+    handle.addEventListener("pointermove", (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!hasMoved) {
+        if (dx * dx + dy * dy < 25) return;
+        hasMoved = true;
+        handle.classList.add("is-dragging");
+        hidePreview();
+      }
+      const nextPos = clampPosition(startLeft + dx, startTop + dy);
+      curLeft = nextPos.left;
+      curTop = nextPos.top;
+      handle.style.left = `${curLeft}px`;
+      handle.style.top = `${curTop}px`;
+      handle.style.right = "auto";
+      updateTimelinePosition();
+    });
+
+    function finishDrag() {
+      if (!isDragging) return;
+      isDragging = false;
+      handle.classList.remove("is-dragging");
+      if (hasMoved) {
+        chrome.storage.local.set({ cce_dot_position: { left: curLeft, top: curTop } });
+      }
+    }
+
+    handle.addEventListener("pointerup", finishDrag);
+    handle.addEventListener("pointercancel", finishDrag);
+
+    window.addEventListener("resize", () => {
+      const rect = handle.getBoundingClientRect();
+      applyHandlePosition(rect.left, rect.top);
+    });
+
+    function updateTimelinePosition() {
+      if (!isExpanded) return;
+      const anchor = handle.getBoundingClientRect();
+      const below = window.innerHeight - anchor.bottom - 16;
+      const above = anchor.top - 16;
+      const isBelow = below >= above;
+      const trackHeight = Math.max(48, Math.min(360, isBelow ? below : above));
+      const top = isBelow ? anchor.bottom + 6 : anchor.top - trackHeight - 6;
+      timeline.style.left = `${anchor.left}px`;
+      timeline.style.top = `${Math.max(8, top)}px`;
+      timeline.style.height = `${trackHeight}px`;
+
+      const isFlipped = anchor.left < window.innerWidth / 2;
+      timeline.classList.toggle("is-flipped", isFlipped);
+    }
+
+    function showPreview(index, node) {
+      const item = currentItems[index];
+      if (!item || !preview) return;
+      preview.textContent = item.preview || item.text || `Prompt ${item.order || index + 1}`;
+      preview.classList.add("is-visible");
+      const nodeRect = node.getBoundingClientRect();
+      const timelineRect = timeline.getBoundingClientRect();
+      const previewHeight = preview.offsetHeight || 32;
+      const targetTop = (nodeRect.top + nodeRect.height / 2) - previewHeight / 2;
+      const clampedTop = Math.max(8, Math.min(window.innerHeight - previewHeight - 8, targetTop));
+      preview.style.top = `${clampedTop - timelineRect.top}px`;
+    }
+
+    function hidePreview() {
+      if (preview) preview.classList.remove("is-visible");
+    }
+
+    track.addEventListener("wheel", (e) => {
+      if (content.scrollHeight > track.clientHeight) {
+        e.preventDefault();
+        e.stopPropagation();
+        track.scrollTop += e.deltaY;
+        hidePreview();
+      }
+    }, { passive: false });
+
+    function setActiveDot(index) {
+      activeIndex = index;
+      const buttons = content.querySelectorAll(".cce-dot-node");
+      buttons.forEach((btn, idx) => {
+        btn.classList.toggle("is-active", idx === index);
+      });
+    }
+
+    function renderDots(items) {
+      currentItems = Array.isArray(items) ? items : [];
+      content.innerHTML = "";
+      if (currentItems.length === 0) return;
+
+      const count = currentItems.length;
+      const trackHeight = track.clientHeight || 280;
+      const pitch = count <= 1 ? 24 : Math.min(24, Math.max(8, (trackHeight - 20) / (count - 1)));
+      const contentHeight = Math.max(trackHeight, count * pitch + 16);
+      content.style.height = `${contentHeight}px`;
+
+      const fragment = document.createDocumentFragment();
+      currentItems.forEach((item, index) => {
+        const node = document.createElement("button");
+        node.type = "button";
+        node.className = "cce-dot-node";
+        node.dataset.index = String(index);
+        node.setAttribute("aria-label", `Jump to prompt ${item.order || index + 1}`);
+
+        const dot = document.createElement("span");
+        dot.className = "cce-dot";
+        node.appendChild(dot);
+
+        const topPx = 10 + index * pitch;
+        node.style.top = `${topPx}px`;
+
+        node.addEventListener("mouseenter", () => showPreview(index, node));
+        node.addEventListener("mouseleave", hidePreview);
+        node.addEventListener("focus", () => showPreview(index, node));
+        node.addEventListener("blur", hidePreview);
+        node.addEventListener("click", () => {
+          navigatorBackend.jumpToPrompt(item);
+          setActiveDot(index);
+        });
+
+        fragment.appendChild(node);
+      });
+      content.appendChild(fragment);
+
+      if (activeIndex >= 0 && activeIndex < count) {
+        setActiveDot(activeIndex);
+      } else {
+        setActiveDot(count - 1);
+      }
+    }
+
+    function setExpanded(expanded) {
+      isExpanded = expanded;
+      handle.setAttribute("aria-expanded", String(expanded));
+      timeline.classList.toggle("is-hidden", !expanded);
+      if (expanded) {
+        updateTimelinePosition();
+        if (!initializedForCurrent) {
+          initializedForCurrent = true;
+          globalThis.CCEHistoryNavigator.open();
+        }
+        renderDots(navigatorBackend.getState().items);
+      } else {
+        hidePreview();
+      }
+    }
+
+    handle.addEventListener("click", (e) => {
+      if (hasMoved) {
+        hasMoved = false;
+        return;
+      }
+      setExpanded(!isExpanded);
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && isExpanded) {
+        setExpanded(false);
+        handle.focus();
+      }
+    });
+
+    navigatorBackend.subscribe((state) => {
+      if (isExpanded && state.items) {
+        renderDots(state.items);
+      }
+    });
+
+    let scrollThrottle = null;
+    function syncActiveFromViewport() {
+      if (!isExpanded || currentItems.length === 0) return;
+      const viewportCenter = window.innerHeight / 2;
+      let closestIdx = -1;
+      let minDistance = Infinity;
+
+      for (let i = 0; i < currentItems.length; i++) {
+        const item = currentItems[i];
+        let el = item.node;
+        if (!el || !el.isConnected) {
+          if (item.messageId) {
+            el = document.querySelector(`[data-message-id="${item.messageId}"], [data-turn-id="${item.messageId}"]`);
+            if (el) item.node = el;
+          }
+        }
+        if (el && el.isConnected) {
+          const rect = el.getBoundingClientRect();
+          const center = (rect.top + rect.bottom) / 2;
+          const dist = Math.abs(center - viewportCenter);
+          if (dist < minDistance) {
+            minDistance = dist;
+            closestIdx = i;
+          }
+        }
+      }
+
+      if (closestIdx >= 0 && closestIdx !== activeIndex) {
+        setActiveDot(closestIdx);
+      }
+    }
+
+    window.addEventListener("scroll", () => {
+      if (scrollThrottle) return;
+      scrollThrottle = requestAnimationFrame(() => {
+        scrollThrottle = null;
+        syncActiveFromViewport();
+      });
+    }, { passive: true });
+
+    dotHistory = {
+      root,
+      reset: () => {
+        initializedForCurrent = false;
+        currentItems = [];
+        activeIndex = -1;
+        if (isExpanded) {
+          setExpanded(false);
+        }
+      }
+    };
+
+    document.documentElement.appendChild(host);
+    applyThemeToRoots();
+  }
+
+  function buildUI() {
+    buildQuickExportUI();
+    if (platformId === "chatgpt") {
+      buildDotHistoryUI();
+    }
+    initThemeSync();
   }
 
   window.addEventListener("message", (event) => {
@@ -916,16 +1581,19 @@
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
       injectObserver();
-      buildPanel();
+      buildUI();
     }, { once: true });
   }
-  else buildPanel();
+  else buildUI();
   window.setInterval(() => {
     const nextId = currentConversationId();
     if (nextId !== currentId) {
       currentId = nextId;
       if (navigatorBackend) {
         navigatorBackend.resetForConversation(nextId);
+        if (dotHistory && typeof dotHistory.reset === "function") {
+          dotHistory.reset();
+        }
       }
       if (platformId === "gemini") {
         geminiRecords.length = 0;
