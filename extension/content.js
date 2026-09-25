@@ -379,8 +379,9 @@
         ? platformCore.definition(platformId)
         : { id: platformId, label: platformId };
       currentId = currentConversationId();
-      if (platformId === "chatgpt" && !dotHistory) {
-        buildDotHistoryUI();
+      if (platformId === "chatgpt") {
+        if (!dotHistory) buildDotHistoryUI();
+        initChatGPTSidebarShortcuts();
       }
     }
     for (const key of ["injected", "fetchObserved", "xhrObserved", "jsonCandidates", "conversationCandidates", "jsonParseErrors", "streamResponses", "webSocketObserved", "webSocketMessages", "conversationEndpointObserved", "currentConversationEndpointResponses", "fallbackAttempts", "fallbackResponses", "fallbackConversationCandidates", "fallbackLastResult", "fallbackConfigured", "fallbackSkipReason", "fallbackLastEndpoint", "messagePageResponses", "messagePageCandidates", "messagePagePreviousTrue", "messagePagePreviousFalse", "messagePagePreviousUnknown", "messagePageNextTrue", "messagePageNextFalse", "messagePageNextUnknown", "cachedMessagePages", "lastMessagePageKeys", "lastContentType", "lastResponsePath", "observedResponsePaths", "cacheSize", "fetchHooked", "xhrHooked", "lastCandidatePath", "lastCandidateContentType"]) {
@@ -1619,10 +1620,100 @@
     applyThemeToRoots();
   }
 
+  // --- Sidebar Shortcut Navigation (ChatGPT only) ---
+  function extractConversationUrl(target) {
+    if (!target || typeof target.closest !== "function") return null;
+
+    // If inside a native anchor with href, let native browser modified click handle it
+    if (target.closest("a[href]")) return null;
+
+    // Ignore clicks on inner action buttons (e.g. 3-dots menu, pin button) or open menus
+    const actionBtn = target.closest('button, [aria-haspopup="menu"], [role="menu"], [role="menuitem"]');
+    if (actionBtn) return null;
+
+    // Primary: extract conversation key from conversation row or listitem
+    const itemEl = target.closest(
+      '[data-sidebar-chatgpt-conversation-key], [data-pinned-content-tab-drop-key], [data-conversation-id]'
+    );
+    if (itemEl) {
+      const key =
+        itemEl.getAttribute("data-sidebar-chatgpt-conversation-key") ||
+        itemEl.getAttribute("data-pinned-content-tab-drop-key") ||
+        itemEl.getAttribute("data-conversation-id");
+      if (key) {
+        const match = key.match(/(?:chatgpt:conversation:|\/c\/|^)([a-zA-Z0-9_-]{8,})/);
+        if (match && match[1]) {
+          return new URL(`/c/${match[1]}`, window.location.origin).href;
+        }
+      }
+    }
+
+    // Fallback: check any sidebar listitem attribute containing a conversation id
+    const listItem = target.closest('#app-shell-sidebar [role="listitem"], nav [role="listitem"]');
+    if (listItem && listItem.attributes) {
+      for (let i = 0; i < listItem.attributes.length; i++) {
+        const attr = listItem.attributes[i];
+        if (attr.value && attr.value.includes("chatgpt:conversation:")) {
+          const match = attr.value.match(/chatgpt:conversation:([a-zA-Z0-9_-]+)/);
+          if (match && match[1]) {
+            return new URL(`/c/${match[1]}`, window.location.origin).href;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  let sidebarShortcutsInitialized = false;
+
+  function initChatGPTSidebarShortcuts() {
+    if (sidebarShortcutsInitialized || platformId !== "chatgpt" || typeof document === "undefined" || !document.addEventListener) return;
+    sidebarShortcutsInitialized = true;
+
+    document.addEventListener(
+      "mousedown",
+      (e) => {
+        // Prevent middle-click scroll anchor in Chrome on Linux/Windows
+        if (e.button === 1 && extractConversationUrl(e.target)) {
+          e.preventDefault();
+        }
+      },
+      true
+    );
+
+    const handleShortcutNavigation = (e) => {
+      const isMiddleClick = e.type === "auxclick" && e.button === 1;
+      const isModifiedClick = e.type === "click" && e.button === 0 && (e.ctrlKey || e.metaKey);
+      if (!isMiddleClick && !isModifiedClick) return;
+
+      const url = extractConversationUrl(e.target);
+      if (url) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        if (typeof window.open === "function") {
+          window.open(url, "_blank");
+        }
+      }
+    };
+
+    document.addEventListener("auxclick", handleShortcutNavigation, true);
+    document.addEventListener("click", handleShortcutNavigation, true);
+  }
+
+  if (typeof globalThis !== "undefined") {
+    globalThis.CCEChatGPTSidebarShortcuts = {
+      extractConversationUrl,
+      initChatGPTSidebarShortcuts
+    };
+  }
+
   function buildUI() {
     buildQuickExportUI();
     if (platformId === "chatgpt") {
       buildDotHistoryUI();
+      initChatGPTSidebarShortcuts();
     }
     initThemeSync();
   }
@@ -1688,6 +1779,9 @@
   }
 
   injectObserver();
+  if (platformId === "chatgpt") {
+    initChatGPTSidebarShortcuts();
+  }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
       injectObserver();

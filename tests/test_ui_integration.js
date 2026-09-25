@@ -288,4 +288,214 @@ assert.equal(prev4.left, 30 + 12, 'Preview must flip to right of dot when left i
 
 console.log('PASS: Test 7 passed');
 
+// 8. ChatGPT Sidebar Shortcut Navigation Verification
+console.log('Test 8: ChatGPT Sidebar Shortcut Navigation');
+
+// Assert content.js structure
+assert(contentSrc.includes('function initChatGPTSidebarShortcuts()'), 'initChatGPTSidebarShortcuts must exist');
+assert(contentSrc.includes('function extractConversationUrl('), 'extractConversationUrl must exist');
+assert(contentSrc.includes('data-sidebar-chatgpt-conversation-key'), 'must support data-sidebar-chatgpt-conversation-key');
+assert(contentSrc.includes('data-pinned-content-tab-drop-key'), 'must support data-pinned-content-tab-drop-key');
+assert(contentSrc.includes('target.closest("a[href]")'), 'must preserve native a[href] without redundant interception');
+assert(contentSrc.includes('e.stopImmediatePropagation()'), 'must stop immediate propagation to prevent current tab navigation');
+
+// Functional testing of extractConversationUrl and event handling
+{
+  class SimpleMockElement {
+    constructor(tagName, attrs = {}) {
+      this.tagName = tagName.toUpperCase();
+      this.attrs = { ...attrs };
+      this.dataset = {};
+      this.style = {};
+      this.parentElement = null;
+      this.children = [];
+    }
+    getAttribute(name) { return this.attrs[name] ?? null; }
+    setAttribute(name, val) { this.attrs[name] = String(val); }
+    querySelector() { return null; }
+    querySelectorAll() { return []; }
+    appendChild(child) {
+      child.parentElement = this;
+      this.children.push(child);
+      return child;
+    }
+    closest(selector) {
+      let curr = this;
+      while (curr) {
+        if (curr.matches(selector)) return curr;
+        curr = curr.parentElement;
+      }
+      return null;
+    }
+    matches(selector) {
+      const parts = selector.split(',').map(s => s.trim());
+      for (const part of parts) {
+        if (part === 'button') {
+          if (this.tagName === 'BUTTON') return true;
+        } else if (part === 'a[href]') {
+          if (this.tagName === 'A' && this.attrs.href) return true;
+        } else if (part.startsWith('[')) {
+          const [k, v] = part.slice(1, -1).split('=');
+          if (!v) {
+            if (this.attrs[k] !== undefined) return true;
+          } else {
+            const clean = v.replace(/['"]/g, '');
+            if (this.attrs[k] === clean) return true;
+          }
+        }
+      }
+      return false;
+    }
+  }
+
+  // Set up mock window and sandbox
+  const listeners = new Map();
+  const openedUrls = [];
+  const addListener = (type, fn) => {
+    if (!listeners.has(type)) listeners.set(type, []);
+    listeners.get(type).push(fn);
+  };
+  const removeListener = (type, fn) => {
+    const arr = listeners.get(type);
+    if (arr) {
+      const idx = arr.indexOf(fn);
+      if (idx >= 0) arr.splice(idx, 1);
+    }
+  };
+
+  const sandbox = {
+    console,
+    URL,
+    location: { origin: 'https://chatgpt.com', href: 'https://chatgpt.com/c/initial-conv' },
+    window: {
+      location: { origin: 'https://chatgpt.com', href: 'https://chatgpt.com/c/initial-conv' },
+      open: (url, target) => { openedUrls.push({ url, target }); return null; },
+      addEventListener: addListener,
+      removeEventListener: removeListener,
+      postMessage: () => {}
+    },
+    document: {
+      readyState: 'loading',
+      addEventListener: addListener,
+      removeEventListener: removeListener,
+      createElement: (tag) => new SimpleMockElement(tag),
+      head: new SimpleMockElement('head'),
+      documentElement: new SimpleMockElement('html')
+    },
+    chrome: { runtime: { getURL: (p) => p } },
+    globalThis: {}
+  };
+  sandbox.window.document = sandbox.document;
+  sandbox.globalThis = sandbox;
+
+  vm.runInNewContext(contentSrc, sandbox);
+
+  assert(sandbox.globalThis.CCEChatGPTSidebarShortcuts, 'CCEChatGPTSidebarShortcuts must be exported');
+  const { extractConversationUrl } = sandbox.globalThis.CCEChatGPTSidebarShortcuts;
+
+  // 1. Regular sidebar conversation item
+  const convRow = new SimpleMockElement('div', {
+    'data-sidebar-chatgpt-conversation-key': 'chatgpt:conversation:conv-1111-2222',
+    role: 'listitem'
+  });
+  const convBtn = new SimpleMockElement('div', { role: 'button', class: 'sidebar-item' });
+  const convTitle = new SimpleMockElement('span');
+  const actionBtn = new SimpleMockElement('button', { 'aria-label': '聊天操作' });
+  convBtn.appendChild(convTitle);
+  convBtn.appendChild(actionBtn);
+  convRow.appendChild(convBtn);
+
+  assert.equal(extractConversationUrl(convTitle), 'https://chatgpt.com/c/conv-1111-2222');
+  assert.equal(extractConversationUrl(convBtn), 'https://chatgpt.com/c/conv-1111-2222');
+  assert.equal(extractConversationUrl(actionBtn), null, 'Action button inside item must be ignored');
+
+  // 2. Pinned conversation item
+  const pinnedRow = new SimpleMockElement('div', {
+    'data-pinned-content-tab-drop-key': 'chatgpt:conversation:conv-pinned-3333',
+    role: 'listitem'
+  });
+  const pinnedBtn = new SimpleMockElement('div', { role: 'button', class: 'sidebar-item' });
+  pinnedRow.appendChild(pinnedBtn);
+  assert.equal(extractConversationUrl(pinnedBtn), 'https://chatgpt.com/c/conv-pinned-3333');
+
+  // 3. Non-conversation sidebar elements
+  const newChatBtn = new SimpleMockElement('button');
+  assert.equal(extractConversationUrl(newChatBtn), null, 'New chat button must be ignored');
+  const projBtn = new SimpleMockElement('button', { 'data-app-action-sidebar-section-toggle': '' });
+  assert.equal(extractConversationUrl(projBtn), null, 'Project section toggle must be ignored');
+
+  // 4. Native anchor with href (must not be intercepted)
+  const nativeAnchor = new SimpleMockElement('a', { href: '/c/native-item' });
+  assert.equal(extractConversationUrl(nativeAnchor), null, 'Native a[href] must not be intercepted');
+
+  // 5. Test event listeners: auxclick and modified click
+  function fire(type, target, props = {}) {
+    let prevented = false;
+    let stopped = false;
+    let immediateStopped = false;
+    const event = {
+      type,
+      target,
+      button: props.button ?? 0,
+      ctrlKey: Boolean(props.ctrlKey),
+      metaKey: Boolean(props.metaKey),
+      preventDefault: () => { prevented = true; },
+      stopPropagation: () => { stopped = true; },
+      stopImmediatePropagation: () => { immediateStopped = true; },
+      get defaultPrevented() { return prevented; }
+    };
+    const list = listeners.get(type) || [];
+    for (const fn of list) {
+      if (immediateStopped) break;
+      fn(event);
+    }
+    return { prevented, stopped, immediateStopped };
+  }
+
+  // Middle-click on conversation item
+  openedUrls.length = 0;
+  const resMid = fire('auxclick', convTitle, { button: 1 });
+  assert.equal(openedUrls.length, 1);
+  assert.equal(openedUrls[0].url, 'https://chatgpt.com/c/conv-1111-2222');
+  assert.equal(openedUrls[0].target, '_blank');
+  assert.equal(resMid.prevented, true);
+  assert.equal(resMid.immediateStopped, true);
+
+  // Ctrl+click on pinned item
+  openedUrls.length = 0;
+  const resCtrl = fire('click', pinnedBtn, { button: 0, ctrlKey: true });
+  assert.equal(openedUrls.length, 1);
+  assert.equal(openedUrls[0].url, 'https://chatgpt.com/c/conv-pinned-3333');
+  assert.equal(openedUrls[0].target, '_blank');
+  assert.equal(resCtrl.prevented, true);
+  assert.equal(resCtrl.immediateStopped, true);
+
+  // Cmd+click on conversation item
+  openedUrls.length = 0;
+  const resCmd = fire('click', convBtn, { button: 0, metaKey: true });
+  assert.equal(openedUrls.length, 1);
+  assert.equal(openedUrls[0].url, 'https://chatgpt.com/c/conv-1111-2222');
+  assert.equal(resCmd.prevented, true);
+
+  // Normal left-click on conversation item (must not intercept)
+  openedUrls.length = 0;
+  const resNorm = fire('click', convBtn, { button: 0 });
+  assert.equal(openedUrls.length, 0);
+  assert.equal(resNorm.prevented, false);
+  assert.equal(resNorm.immediateStopped, false);
+
+  // Ctrl+click on action button (3-dots) (must not intercept)
+  openedUrls.length = 0;
+  const resAct = fire('click', actionBtn, { button: 0, ctrlKey: true });
+  assert.equal(openedUrls.length, 0);
+  assert.equal(resAct.prevented, false);
+
+  // Middle-click mousedown prevents scroll anchor
+  const resMD = fire('mousedown', convBtn, { button: 1 });
+  assert.equal(resMD.prevented, true, 'mousedown button 1 must prevent default for autoscroll');
+}
+
+console.log('PASS: Test 8 passed');
+
 console.log('\nALL UI INTEGRATION TESTS PASSED SUCCESSFULLY!');
+
